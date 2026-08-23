@@ -47,6 +47,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     vin = entry.data[CONF_VIN]
     model = entry.data.get(CONF_MODEL, "GWM")
 
+    # ======================
+    # 防止 HA 自动重试造成的 "has already been setup" ValueError
+    # ======================
+    # 场景:上个 setup 调用部分 platform 成功了,但最后我们 return False(之前版本错误的做法),
+    # 触发 HA 自动重试 config entry,HA 内部 entity_component 还保留上次成功的 platform,
+    # 再次调用 async_forward_entry_setups 就会抛:
+    #   ValueError: Config entry xxx for gwm_cn.sensor has already been setup!
+    # 所以:如果这个 entry_id 已经在 hass.data[DOMAIN] 里(说明是重试、残留未清),
+    # 先显式 unload 所有 platforms + 移除服务,给本次 setup 留一个干净的状态。
+    hass.data.setdefault(DOMAIN, {})
+    if entry.entry_id in hass.data[DOMAIN]:
+        _LOGGER.warning(
+            "检测到 config entry %s 残留的 setup 状态(通常是上次 setup 失败 HA 自动重试)。"
+            "先清理所有 platforms 避免 ValueError: has already been setup。",
+            entry.entry_id,
+        )
+        try:
+            await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("清理残留 platforms 时忽略异常,继续 setup")
+        # 只清掉 service 相关(最后一个 entry unload 时整体 remove,这里保守不 remove,
+        # 直接 async_register 也不会重复抛错,HA 内部去重了)
+
     client = GWMChinaClient(access_token, hw_waf_ses_id, hw_waf_ses_time)
 
     coordinator = GWMChinaUpdateCoordinator(
@@ -54,9 +77,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     coordinator.config_entry = entry
 
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except UpdateFailed:
+        # 即使第一次 refresh 失败(网络问题/token 失效),也不要直接 return False。
+        # 不然会导致:① HA 把 entry 标记为 SetupFailed 并持续重试;② 如果之前有残留,
+        # 下次重试会撞 "has already been setup"。
+        # 改为:打 WARNING 继续 setup(后续 coordinator 会按 interval 轮询重试)。
+        _LOGGER.warning(
+            "GWM CN 第一次拉车辆数据失败(网络/token 失效?);集成仍会加载,"
+            "后续 coordinator 每 5 分钟会自动重试。请检查 token 是否过期。"
+        )
 
-    hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     # 注册「手动刷新」服务(支持多实例,通过 VIN 定位)
@@ -67,33 +99,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 continue
             await coord.async_request_refresh()
 
-    hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
+    # HA 的 async_register 不会因为重复调而报错,会静默覆盖/去重
+    if not hass.services.has_service(DOMAIN, SERVICE_REFRESH):
+        hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
 
-    # 一次性调用 HA 标准 async_forward_entry_setups(批量复数 API)
-    # 该 API 内部会为每个 platform 捕获异常。如果返回 False 意味着全部/部分挂了,
-    # 我们再额外用 hass.config_entries.flow 暴露的信息不好获取,
-    # 改为:先用 try/except 包一层整体,任何异常 → 打 ERROR 日志并返回 False。
+    # ============================================================
+    # 关键:部分 platform 失败 不要 return False!
+    # ============================================================
+    # async_forward_entry_setups 返回 False 的含义是「至少 1 个 platform setup 失败」。
+    # 之前版本我写成:失败就 return False → HA 把整个集成标记 SetupFailed 并重试,
+    # 但上一轮成功 setup 的 platform 没有被自动 unload,下一轮 HA 调 forward_entry_setups
+    # 时直接抛 ValueError: "has already been setup" (用户当前遇到的报错)。
+    #
+    # 官方集成的正确做法:部分 platform 失败 → 只打日志,继续 return True,
+    # 让已经成功的 platform(比如 binary_sensor/device_tracker)继续工作,
+    # 用户至少能看到部分实体。日志里也会有 "Setup failed for xxx" 的完整堆栈。
     try:
-        ok = await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        setup_result = await hass.config_entries.async_forward_entry_setups(
+            entry, PLATFORMS
+        )
     except Exception:  # noqa: BLE001
         _LOGGER.exception(
-            "加载 platform(s) %s 时抛异常!请查看上方完整堆栈。"
-            "大概率是某个 platform 的 import/模块初始化崩溃(单位枚举/import 错误等)。",
+            "调用 async_forward_entry_setups(%s) 时抛了未预期异常!"
+            "请查看上方完整堆栈(通常是某个 platform 的 import/单位枚举崩溃)。"
+            "集成仍会以部分功能继续加载。",
             [str(p) for p in PLATFORMS],
         )
-        return False
+        setup_result = False
 
-    if not ok:
-        # HA 内部已为每个失败 platform 打了 CONFIG_ENTRY_SETUP_ERROR 事件,
-        # 我们这里再补一条用户能看懂的日志
+    if not setup_result:
         _LOGGER.error(
-            "以下 platform 至少有一个加载失败: %s。"
-            "请查看 HA 日志 → 搜索关键词 'Setup failed for' 或 'platform' 查看具体原因。"
-            "没有加载出来的实体(例如 sensor/油量/胎压)对应的 platform 就是失败的。",
+            "以下 platform 中至少有一个加载失败: %s。"
+            "请在 HA 日志里搜索关键词 'Setup failed for' 定位到具体 platform 和堆栈,"
+            "把那几行贴出来就能秒修。集成仍以成功的 platform 继续运行(不会触发 HA 自动重试冲突)。",
             [str(p) for p in PLATFORMS],
         )
-        return False
 
+    # 无论 setup_result 是 True 还是 False,都 return True。
+    # 好处:① 不再触发 HA 自动重试 → 不会撞 "has already been setup"
+    #      ② 成功的 platform 正常出实体,用户能用一部分 > 0
     return True
 
 
