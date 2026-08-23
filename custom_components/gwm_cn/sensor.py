@@ -17,14 +17,14 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-# 注意:不使用 UnitOfVolumeFlowRate(其枚举里没有「油耗」单位)
-# 也尽量避免使用 UnitOf* 常量枚举成员引用可能不存在的成员
-from homeassistant.const import (
-    UnitOfLength,
-    UnitOfPressure,
-    UnitOfTemperature,
-    UnitOfVolume,
-)
+# ⚠️ 不要 import 任何 UnitOf* 枚举!
+# HA 不同版本的枚举成员名频繁变化,比如:
+#   "kPa" (我们写的) 根本不存在 → 应该是 KILOPASCAL 单数
+#   "km" → 可能是 KILOMETER 单数(不同版本不同)
+#   UnitOfVolumeFlowRate.LITERS_PER_KILOMETER → 维度不对,枚举根本没有
+#   homeassistant.const.PERCENTAGE → 2024.x 后删除
+# 全改用字符串字面量单位("kPa"/"km"/"L"/"°C"/"%"/"L/100km"),
+# HA 对字符串单位完全兼容,也不校验是不是枚举成员,0 兼容性问题。
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -104,7 +104,7 @@ class GWMFuelVolumeSensor(GWMSensorBase):
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry, "剩余油量", "fuel_volume")
         self._attr_device_class = SensorDeviceClass.VOLUME
-        self._attr_native_unit_of_measurement = UnitOfVolume.LITERS
+        self._attr_native_unit_of_measurement = "L"
         self._attr_icon = "mdi:gas-station"
 
     @property
@@ -121,7 +121,7 @@ class GWMFuelRangeSensor(GWMSensorBase):
         super().__init__(coordinator, config_entry, "综合续航", "fuel_range")
         self._attr_device_class = SensorDeviceClass.DISTANCE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+        self._attr_native_unit_of_measurement = "km"
         self._attr_icon = "mdi:map-marker-distance"
 
     @property
@@ -172,7 +172,7 @@ class GWMEvRangeSensor(GWMSensorBase):
         super().__init__(coordinator, config_entry, "纯电续航", "ev_range")
         self._attr_device_class = SensorDeviceClass.DISTANCE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+        self._attr_native_unit_of_measurement = "km"
         self._attr_icon = "mdi:ev-station"
         self._attr_entity_registry_enabled_default = False
 
@@ -190,7 +190,7 @@ class GWMMileageSensor(GWMSensorBase):
         super().__init__(coordinator, config_entry, "行驶总里程", "mileage")
         self._attr_device_class = SensorDeviceClass.DISTANCE
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
-        self._attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+        self._attr_native_unit_of_measurement = "km"
         self._attr_icon = "mdi:counter"
 
     @property
@@ -238,7 +238,7 @@ class GWMCabinTempSensor(GWMSensorBase):
         super().__init__(coordinator, config_entry, "车厢温度", "cabin_temp")
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        self._attr_native_unit_of_measurement = "°C"
         self._attr_icon = "mdi:thermometer"
 
     @property
@@ -311,7 +311,7 @@ class GWMTirePressureSensor(GWMSensorBase):
         self.position = position
         self._attr_device_class = SensorDeviceClass.PRESSURE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfPressure.KILOPASCALS
+        self._attr_native_unit_of_measurement = "kPa"
         self._attr_icon = "mdi:car-tire-alert"
 
     @property
@@ -334,7 +334,7 @@ class GWMTireTempSensor(GWMSensorBase):
         self.position = position
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        self._attr_native_unit_of_measurement = "°C"
         self._attr_icon = "mdi:thermometer"
 
     @property
