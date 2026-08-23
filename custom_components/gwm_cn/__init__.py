@@ -70,7 +70,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # 逐个 platform 加载,单个平台出错(比如 import 崩了)不拖累其它
+    # (比如 sensor.py 有单位常量不存在的 bug,不至于 binary_sensor 和 tracker 全挂)
+    failed: list[Platform] = []
+    for platform in PLATFORMS:
+        try:
+            await hass.config_entries.async_forward_entry_setup(entry, platform)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "加载 platform %s 失败!请查看上方完整堆栈。该平台实体将不显示。",
+                platform,
+            )
+            failed.append(platform)
+
+    if len(failed) == len(PLATFORMS):
+        # 全部 platform 都挂了,setup 视为失败(让用户去修,不要 entry 假上线)
+        return False
+    if failed:
+        _LOGGER.warning(
+            "以下 platform 加载失败已跳过: %s。请检查 HA 日志中的堆栈。",
+            [str(p) for p in failed],
+        )
+
     return True
 
 

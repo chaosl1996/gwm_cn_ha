@@ -17,13 +17,13 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+# 注意:不使用 UnitOfVolumeFlowRate(其枚举里没有「油耗」单位)
+# 也尽量避免使用 UnitOf* 常量枚举成员引用可能不存在的成员
 from homeassistant.const import (
-    PERCENTAGE,
     UnitOfLength,
     UnitOfPressure,
     UnitOfTemperature,
     UnitOfVolume,
-    UnitOfVolumeFlowRate,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -153,7 +153,8 @@ class GWMHevBatteryPercentSensor(GWMSensorBase):
         super().__init__(coordinator, config_entry, "混动动力电池", "hev_battery_percent")
         self._attr_device_class = SensorDeviceClass.BATTERY
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = PERCENTAGE
+        # 用字符串 "%" 替代 homeassistant.const.PERCENTAGE(2024.x 后已移除,避免崩)
+        self._attr_native_unit_of_measurement = "%"
         self._attr_icon = "mdi:car-electric"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -200,13 +201,16 @@ class GWMMileageSensor(GWMSensorBase):
 
 
 class GWMAvgFuelConsumptionSensor(GWMSensorBase):
-    """平均油耗 L/100km。avgFuelConse(当前版本 API 经常返回 null)。"""
+    """平均油耗 L/100km。avgFuelConse(当前 GWM v2.0 API 经常返回 null)。"""
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry, "平均油耗", "avg_fuel_consumption")
-        self._attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+        # ⚠️ 不使用 VOLUME_FLOW_RATE device_class:
+        # HA 的 UnitOfVolumeFlowRate 是流量(体积/时间),枚举里根本没有
+        # LITERS_PER_KILOMETER(油耗:体积/距离),引用会 AttributeError → 整个 sensor 平台崩
+        # 改为不声明 device_class,直接用字符串 "L/100km" 当单位,HA 不校验字符串
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfVolumeFlowRate.LITERS_PER_KILOMETER
+        self._attr_native_unit_of_measurement = "L/100km"
         self._attr_icon = "mdi:fuel"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_entity_registry_enabled_default = False
@@ -219,8 +223,9 @@ class GWMAvgFuelConsumptionSensor(GWMSensorBase):
         if val is None:
             return None
         try:
-            # API 返回 L/100km;HA 单位是 L/km → 除以 100
-            return float(val) / 100.0
+            # API 返回的就是 L/100km 数字(比如 8.7 表示 8.7L/100km)
+            # 不做单位换算(上面的 unit 已经是 "L/100km" 字符串)
+            return float(val)
         except (ValueError, TypeError):
             return None
 
