@@ -1,0 +1,12 @@
+# GWM China 服务定义
+refresh:
+  name: 刷新数据
+  description: 立即从 GWM 中国网关拉取最新车辆状态(若有多个 VIN,可指定只刷新某一个)。
+  fields:
+    vin:
+      name: VIN
+      description: 可选,指定要刷新的车辆 VIN。留空则刷新所有已配置车辆。
+      example: "LGWFF7A56TJ049057"
+      required: false
+      selector:
+        text:

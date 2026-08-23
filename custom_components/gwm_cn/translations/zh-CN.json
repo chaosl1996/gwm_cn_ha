@@ -1,0 +1,129 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "GWM China 集成配置",
+        "description": "从坦克 APP 抓包获取 accessToken + 华为云 WAF Cookie,并填写车辆 VIN",
+        "data": {
+          "access_token": "AccessToken (JWT)",
+          "hw_waf_ses_id": "HWWAFSESID",
+          "hw_waf_ses_time": "HWWAFSESTIME",
+          "vin": "车辆 VIN (17 位)",
+          "model": "车型名称(可选)"
+        },
+        "data_description": {
+          "access_token": "抓包工具里 header 的 accessToken 值,以 eyJ 开头",
+          "hw_waf_ses_id": "Cookie 中 HWWAFSESID 的值",
+          "hw_waf_ses_time": "Cookie 中 HWWAFSESTIME 的值",
+          "vin": "17 位车架号",
+          "model": "显示用,如 Tank 300 / Haval H6"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接 GWM 服务器(token 可能已过期,请重新抓包)",
+      "invalid_auth": "认证失败:accessToken 或 WAF Cookie 无效",
+      "unknown": "未知错误,请查看日志"
+    },
+    "abort": {
+      "already_configured": "该 VIN 已经配置过"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "fuel_volume": {"name": "剩余油量"},
+      "fuel_range": {"name": "综合续航"},
+      "fuel_gauge": {"name": "油表格数"},
+      "hev_battery_percent": {"name": "混动动力电池"},
+      "ev_range": {"name": "纯电续航"},
+      "mileage": {"name": "行驶总里程"},
+      "avg_fuel_consumption": {"name": "平均油耗"},
+      "cabin_temp": {"name": "车厢温度"},
+      "engine_state": {
+        "name": "引擎状态",
+        "state": {"off": "熄火", "starting": "启动中", "running": "运行中"}
+      },
+      "gear": {"name": "档位"},
+      "last_update": {"name": "最后更新"},
+      "gps_switch": {
+        "name": "GPS 开关",
+        "state": {"on": "开", "off": "关", "unknown": "未知"}
+      },
+      "tire_pressure_fl": {"name": "左前胎压"},
+      "tire_pressure_fr": {"name": "右前胎压"},
+      "tire_pressure_rl": {"name": "左后胎压"},
+      "tire_pressure_rr": {"name": "右后胎压"},
+      "tire_temp_fl": {"name": "左前胎温"},
+      "tire_temp_fr": {"name": "右前胎温"},
+      "tire_temp_rl": {"name": "左后胎温"},
+      "tire_temp_rr": {"name": "右后胎温"}
+    },
+    "binary_sensor": {
+      "doors_unlocked": {
+        "name": "车门未锁",
+        "state": {"on": "未锁", "off": "已锁"}
+      },
+      "door_front_left": {"name": "左前门"},
+      "door_front_right": {"name": "右前门"},
+      "door_rear_left": {"name": "左后门"},
+      "door_rear_right": {"name": "右后门"},
+      "door_trunk": {"name": "后备箱"},
+      "hood": {"name": "引擎盖"},
+      "window_front_left": {"name": "左前车窗"},
+      "window_front_right": {"name": "右前车窗"},
+      "window_rear_left": {"name": "左后车窗"},
+      "window_rear_right": {"name": "右后车窗"},
+      "sunroof": {"name": "天窗"},
+      "air_conditioner": {"name": "空调"},
+      "ac_auto_mode": {"name": "空调自动模式"},
+      "front_defroster": {"name": "前除霜"},
+      "rear_defroster": {"name": "后除霜"},
+      "windshield_heat": {"name": "前风挡加热"},
+      "steer_wheel_heat": {"name": "方向盘加热"},
+      "seat_heat_driver": {"name": "主驾座椅加热"},
+      "seat_vent_driver": {"name": "主驾座椅通风"},
+      "seat_heat_passenger": {"name": "副驾座椅加热"},
+      "seat_vent_passenger": {"name": "副驾座椅通风"},
+      "seat_heat_rear_left": {"name": "左后座椅加热"},
+      "seat_heat_rear_right": {"name": "右后座椅加热"},
+      "tire_pressure_alarm_fl": {"name": "左前胎压报警"},
+      "tire_pressure_alarm_fr": {"name": "右前胎压报警"},
+      "tire_pressure_alarm_rl": {"name": "左后胎压报警"},
+      "tire_pressure_alarm_rr": {"name": "右后胎压报警"},
+      "antitheft": {"name": "防盗激活"},
+      "oil_alarm": {"name": "油量报警"}
+    },
+    "device_tracker": {
+      "vehicle_location": {
+        "name": "车辆位置",
+        "state_attributes": {
+          "mileage": {"name": "行驶总里程"},
+          "fuel_volume": {"name": "剩余油量"},
+          "fuel_range": {"name": "综合续航"},
+          "hev_battery_percent": {"name": "混动电池"},
+          "ev_range": {"name": "纯电续航"},
+          "engine_state": {
+            "name": "引擎状态",
+            "state": {"off": "熄火", "starting": "启动中", "running": "运行中"}
+          },
+          "doors_locked": {
+            "name": "门锁",
+            "state": {"locked": "已锁", "unlocked": "未锁", "unknown": "未知"}
+          },
+          "vin": {"name": "VIN"},
+          "model": {"name": "车型"},
+          "vehicleNumber": {"name": "车牌"},
+          "update_time": {"name": "更新时间"},
+          "latitude": {"name": "纬度"},
+          "longitude": {"name": "经度"}
+        }
+      }
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "刷新车辆数据",
+      "description": "立即从 GWM 中国网关拉取最新车辆状态。"
+    }
+  }
+}

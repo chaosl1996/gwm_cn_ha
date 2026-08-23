@@ -1,0 +1,13 @@
+{
+  "domain": "gwm_cn",
+  "name": "GWM China (Tank/Haval)",
+  "codeowners": ["@chaosl1996"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/chaosl1996/gwm_cn_ha",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/chaosl1996/gwm_cn_ha/issues",
+  "requirements": ["requests>=2.25.1"],
+  "version": "0.1.0"
+}

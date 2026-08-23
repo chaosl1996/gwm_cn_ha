@@ -1,0 +1,332 @@
+"""GWM China API Client (token-based, no signing).
+
+该客户端直接复用从官方 APP 抓包到的 accessToken 与华为云 WAF 会话 Cookie,
+不进行 gwm-auth-sign 签名。优点是无需逆向 APP 获取 app_sec,
+代价是 token 失效(约 7 天)后需要用户重新抓包更新配置。
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Optional
+
+import requests
+
+from .const import BASE_URL, GET_STATUS_PATH
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _parse_value_unit(value_str: Any) -> Optional[float]:
+    """解析 CN API 的 'value,unit' 格式(如 '273,kPa' / '77,L' / '80,%')。
+
+    返回纯数值部分;解析失败返回 None。
+    """
+    if value_str is None:
+        return None
+    if isinstance(value_str, (int, float)):
+        return float(value_str)
+    if not isinstance(value_str, str):
+        return None
+    s = value_str.strip()
+    if not s or s in ("--", "null", "NULL"):
+        return None
+    # 取逗号前的数值部分
+    head = s.split(",", 1)[0]
+    try:
+        return float(head)
+    except ValueError:
+        return None
+
+
+def _str_to_bool(
+    value: Any,
+    *,
+    true_vals: tuple[str, ...] = ("1",),
+    false_vals: tuple[str, ...] = ("0",),
+) -> Optional[bool]:
+    """把字符串状态值转为 bool。
+
+    多数 CN 字段:'1' = 开/激活,'0' = 关/未激活。
+    对于门窗等多态字段(如 WinPosnSts:"1"=关,"3"=开),
+    可以通过 true_vals + false_vals 明确指定两态值集合,
+    未命中集合的值视为 None(未知,不在 HA 上显示瞎猜结果)。
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        s = str(int(value))
+    elif isinstance(value, str):
+        s = value.strip()
+    else:
+        return None
+    if s in ("--", "null", "NULL", ""):
+        return None
+    if s in true_vals:
+        return True
+    if s in false_vals:
+        return False
+    return None
+
+
+def _str_to_bool_inverted(value: Any) -> Optional[bool]:
+    """反向语义:'0' 视为 True(已锁/已关),'1' 视为 False。
+
+    用于 mainDrveDoorLockSts 这种 '0'=已锁 的字段。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value == 0
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if s in ("--", "null", "NULL", ""):
+        return None
+    if s == "0":
+        return True
+    if s == "1":
+        return False
+    return None
+
+
+class GWMChinaClient:
+    """GWM 中国网关车辆状态查询客户端(token + WAF cookie)。"""
+
+    def __init__(
+        self,
+        access_token: str,
+        hw_waf_ses_id: str,
+        hw_waf_ses_time: str,
+        verify_ssl: bool = True,
+    ) -> None:
+        """初始化客户端。
+
+        :param access_token: JWT accessToken(从抓包工具复制)
+        :param hw_waf_ses_id: 华为云 WAF HWWAFSESID cookie 值
+        :param hw_waf_ses_time: 华为云 WAF HWWAFSESTIME cookie 值
+        :param verify_ssl: 是否校验 SSL 证书(生产保持 True,仅在调试时关闭)
+        """
+        self.session = requests.Session()
+        self.access_token = access_token
+        self.hw_waf_ses_id = hw_waf_ses_id
+        self.hw_waf_ses_time = hw_waf_ses_time
+        self.verify_ssl = verify_ssl
+        self.last_error_code: Optional[str] = None
+        self.last_error_description: Optional[str] = None
+        self.last_http_status: Optional[int] = None
+
+    def _build_headers(self) -> Dict[str, str]:
+        """构造请求 header(基于多次 HAR 抓包确认的最小集合)。"""
+        return {
+            "Host": "apgdm.gwmcloudcn.com",
+            "sourceApp": "GWM",
+            "language": "zh-cn",
+            "User-Agent": (
+                "GWmSuperCarWidgetExtension/75 "
+                "CFNetwork/3860.700.1 Darwin/25.6.0"
+            ),
+            "Cookie": (
+                f"HWWAFSESID={self.hw_waf_ses_id}; "
+                f"HWWAFSESTIME={self.hw_waf_ses_time}"
+            ),
+            "brand": "10",
+            "channel": "APP",
+            "cVer": "2.1.5",
+            "accessToken": self.access_token,
+            "rs": "2",
+            "terminal": "GW_APP_GWM",
+            "securityToken": "",
+            "Connection": "keep-alive",
+            "Accept-Language": "zh-CN,zh-Hans;q=0.9",
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "enterpriseId": "CC01",
+            "Accept-Encoding": "gzip, deflate, br",
+        }
+
+    def get_vehicle_status(self, vin: str) -> Optional[Dict[str, Any]]:
+        """查询车辆最新状态。
+
+        :param vin: 17 位车架号
+        :return: 成功时返回响应 data 字段(扁平 JSON);失败返回 None
+        """
+        url = f"{BASE_URL}{GET_STATUS_PATH}"
+        params = {"vin": vin}
+        headers = self._build_headers()
+
+        try:
+            response = self.session.get(
+                url, headers=headers, params=params, timeout=30,
+                verify=self.verify_ssl,
+            )
+            self.last_http_status = response.status_code
+
+            if response.status_code != 200:
+                body = response.text[:500] if response.text else "Empty body"
+                self.last_error_code = "http_error"
+                self.last_error_description = f"HTTP {response.status_code}: {body}"
+                _LOGGER.error(
+                    "GWM CN API HTTP %s: %s",
+                    response.status_code,
+                    body,
+                )
+                return None
+
+            result = response.json() if response.text else {}
+
+        except requests.exceptions.RequestException as exc:
+            self.last_error_code = "request_error"
+            self.last_error_description = str(exc)
+            _LOGGER.exception("GWM CN API request failed: %s", exc)
+            return None
+        except ValueError as exc:
+            self.last_error_code = "json_error"
+            self.last_error_description = str(exc)
+            _LOGGER.exception("GWM CN API JSON decode failed: %s", exc)
+            return None
+
+        code = result.get("code")
+        if code != "000000":
+            self.last_error_code = str(code)
+            self.last_error_description = result.get(
+                "description", "Unknown error"
+            )
+            _LOGGER.warning(
+                "GWM CN API error code=%s description=%s",
+                code,
+                self.last_error_description,
+            )
+            return None
+
+        # 成功
+        self.last_error_code = None
+        self.last_error_description = None
+        return result.get("data")
+
+
+def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
+    """解析 CN 版车辆状态数据(扁平 JSON 结构)。
+
+    字段语义统一约定:
+      - bool 字段:True=激活/打开,False=未激活/关闭,None=未知
+      - doors_locked:True=已锁,False=未锁
+      - engine_state:"0"=熄火,"1"=启动中,"2"=运行
+      - 仅解析 HAR 中实际出现过非 null 值的字段,避免实体过多
+    """
+    info: Dict[str, Any] = {}
+
+    if not data:
+        return info
+
+    # ===== 顶级字段 =====
+    info["acquisition_time"] = data.get("acquisitionTime")
+    info["gps_switch_on"] = data.get("gpsSwitchOn")
+    info["tbox_status"] = data.get("tboxStatus")
+    info["fuel_gauge"] = data.get("oilQty")  # 0-8 格油表
+
+    vs = data.get("vehicleStatusInfo") or {}
+
+    # ===== 油电 =====
+    # remainOil: 剩余油量(L)
+    info["fuel_volume"] = _parse_value_unit(vs.get("remainOil"))
+    # preMileage(顶级):综合续航(油+电)km,与 APP 截图「续航里程」一致
+    info["fuel_range"] = _parse_value_unit(vs.get("preMileage"))
+    # remainElectricPercent: PHEV 电池电量 %(不是油表油量!)
+    info["battery_percent"] = _parse_value_unit(vs.get("remainElectricPercent"))
+    # mileage:行驶总里程 km(与 APP 截图一致)
+    info["mileage"] = _parse_value_unit(vs.get("mileage"))
+    # charge.evContnsDistance:纯电续航 km(仅 PHEV 有,HEV 此值 null)
+    charge = vs.get("charge") or {}
+    info["ev_range"] = _parse_value_unit(charge.get("evContnsDistance"))
+    # 额外实用:平均油耗(如有)
+    info["avg_fuel_consumption"] = _parse_value_unit(vs.get("avgFuelConse"))
+
+    # ===== 温度 =====
+    info["cabin_temp"] = _parse_value_unit(vs.get("cbnTemp"))
+
+    # ===== 引擎 / 档位 =====
+    info["engine_state"] = vs.get("engineSts")
+    info["power_state"] = vs.get("power")
+    info["gear"] = vs.get("hcuGearSts")
+
+    # ===== 门锁 =====
+    # esclLocksts 或 mainDrveDoorLockSts:"0"=已锁
+    info["doors_locked"] = _str_to_bool_inverted(vs.get("esclLocksts"))
+    if info["doors_locked"] is None:
+        door = vs.get("door") or {}
+        info["doors_locked"] = _str_to_bool_inverted(
+            door.get("mainDrveDoorLockSts")
+        )
+
+    # ===== 车门("1"=开,"0"=关) =====
+    door = vs.get("door") or {}
+    info["door_front_left"] = _str_to_bool(door.get("mainDrveDoorSts"))
+    info["door_front_right"] = _str_to_bool(door.get("viceDoorSts"))
+    info["door_rear_left"] = _str_to_bool(door.get("lbDoorSts"))
+    info["door_rear_right"] = _str_to_bool(door.get("rbDoorSts"))
+    info["door_trunk"] = _str_to_bool(door.get("backDoorSts"))
+    info["hood"] = _str_to_bool(vs.get("engineDoorSts"))
+
+    # ===== 车窗 / 天窗 =====
+    # *WinPosnSts: "1"=关,"3"=开(值来自官方 APP 停车截图验证)
+    # skyLightSts: "3"=开/半开,"0"/"1"=关
+    windows = vs.get("windows") or {}
+    info["window_front_left"] = _str_to_bool(
+        windows.get("lfWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    )
+    info["window_front_right"] = _str_to_bool(
+        windows.get("rfWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    )
+    info["window_rear_left"] = _str_to_bool(
+        windows.get("lbWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    )
+    info["window_rear_right"] = _str_to_bool(
+        windows.get("rbWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    )
+    info["sunroof"] = _str_to_bool(
+        windows.get("skyLightSts"), true_vals=("3",), false_vals=("0", "1")
+    )
+    # 前挡风玻璃加热(区别于 frontFrost 前除霜)
+    info["windshield_heat"] = _str_to_bool(windows.get("fWinHeatSts"))
+
+    # ===== 空调 / 除霜 / 自动模式 =====
+    info["air_conditioner"] = _str_to_bool(vs.get("airConditionSts"))
+    info["ac_auto_mode"] = _str_to_bool(vs.get("airConditionAutoModEnaSts"))
+    info["front_defroster"] = _str_to_bool(vs.get("frontFrost"))
+    info["rear_defroster"] = _str_to_bool(vs.get("backFrost"))
+
+    # ===== 座椅 / 方向盘 =====
+    info["steer_wheel_heat"] = _str_to_bool(vs.get("steerWheelHeat"))
+    seat = vs.get("seat") or {}
+    info["seat_heat_driver"] = _str_to_bool(seat.get("mainDriverSeatHeatSts"))
+    info["seat_vent_driver"] = _str_to_bool(seat.get("mainDriverSeatVentSts"))
+    info["seat_heat_passenger"] = _str_to_bool(seat.get("viceSeatHeatSts"))
+    info["seat_vent_passenger"] = _str_to_bool(seat.get("viceSeatVentSts"))
+    info["seat_heat_rear_left"] = _str_to_bool(seat.get("lbSeatHeatSts"))
+    info["seat_heat_rear_right"] = _str_to_bool(seat.get("rbSeatHeatSts"))
+
+    # ===== 胎压(lf=前左, rf=前右, lb=后左, rb=后右) =====
+    tire_press = vs.get("tirePress") or {}
+    pos_map = [("fl", "lf"), ("fr", "rf"), ("rl", "lb"), ("rr", "rb")]
+    for pos, prefix in pos_map:
+        info[f"tire_pressure_{pos}"] = _parse_value_unit(
+            tire_press.get(f"{prefix}TirePressVal")
+        )
+        info[f"tire_pressure_alarm_{pos}"] = _str_to_bool(
+            tire_press.get(f"{prefix}TirePressIndcrSts")
+        )
+
+    # ===== 胎温 =====
+    tire_temp = vs.get("tireTemp") or {}
+    for pos, prefix in pos_map:
+        info[f"tire_temp_{pos}"] = _parse_value_unit(
+            tire_temp.get(f"{prefix}TireTempVal")
+        )
+
+    # ===== 安全 =====
+    info["antitheft"] = _str_to_bool(vs.get("vehicleAntitheftStatus"))
+    info["oil_alarm"] = _str_to_bool(vs.get("oilAlarmSts"))
+
+    return info
