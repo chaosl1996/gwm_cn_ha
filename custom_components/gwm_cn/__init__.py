@@ -17,7 +17,6 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_HW_WAF_SES_ID,
@@ -70,27 +69,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
 
-    # 逐个 platform 加载,单个平台出错(比如 import 崩了)不拖累其它
-    # (比如 sensor.py 有单位常量不存在的 bug,不至于 binary_sensor 和 tracker 全挂)
-    failed: list[Platform] = []
-    for platform in PLATFORMS:
-        try:
-            await hass.config_entries.async_forward_entry_setup(entry, platform)
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception(
-                "加载 platform %s 失败!请查看上方完整堆栈。该平台实体将不显示。",
-                platform,
-            )
-            failed.append(platform)
-
-    if len(failed) == len(PLATFORMS):
-        # 全部 platform 都挂了,setup 视为失败(让用户去修,不要 entry 假上线)
-        return False
-    if failed:
-        _LOGGER.warning(
-            "以下 platform 加载失败已跳过: %s。请检查 HA 日志中的堆栈。",
-            [str(p) for p in failed],
+    # 一次性调用 HA 标准 async_forward_entry_setups(批量复数 API)
+    # 该 API 内部会为每个 platform 捕获异常。如果返回 False 意味着全部/部分挂了,
+    # 我们再额外用 hass.config_entries.flow 暴露的信息不好获取,
+    # 改为:先用 try/except 包一层整体,任何异常 → 打 ERROR 日志并返回 False。
+    try:
+        ok = await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception(
+            "加载 platform(s) %s 时抛异常!请查看上方完整堆栈。"
+            "大概率是某个 platform 的 import/模块初始化崩溃(单位枚举/import 错误等)。",
+            [str(p) for p in PLATFORMS],
         )
+        return False
+
+    if not ok:
+        # HA 内部已为每个失败 platform 打了 CONFIG_ENTRY_SETUP_ERROR 事件,
+        # 我们这里再补一条用户能看懂的日志
+        _LOGGER.error(
+            "以下 platform 至少有一个加载失败: %s。"
+            "请查看 HA 日志 → 搜索关键词 'Setup failed for' 或 'platform' 查看具体原因。"
+            "没有加载出来的实体(例如 sensor/油量/胎压)对应的 platform 就是失败的。",
+            [str(p) for p in PLATFORMS],
+        )
+        return False
 
     return True
 
