@@ -56,6 +56,9 @@ async def async_setup_entry(
         GWMFrontDefrosterSensor(coordinator, config_entry),
         GWMRearDefrosterSensor(coordinator, config_entry),
         GWMWindshieldHeatSensor(coordinator, config_entry),
+        # 灯光(熄火时 "--"→未知,启动后才有 0/1)
+        GWMLowBeamSensor(coordinator, config_entry),
+        GWMHighBeamSensor(coordinator, config_entry),
         # 座椅/方向盘(写死中文名,避免全部变成「过热」「运行」)
         GWMSteerWheelHeatSensor(coordinator, config_entry),
         GWMSeatHeatSensor(coordinator, config_entry, "driver", "主驾座椅加热"),
@@ -201,7 +204,7 @@ class GWMWindowSensor(GWMBinarySensorMultiBase):
 
 
 class GWMSunroofSensor(GWMBinarySensorMultiBase):
-    """天窗(True=打开/半开)。"""
+    """天窗(True=打开;"3"=关为锁车熄火实测,开/翘起的值待实测校准)。"""
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry, "天窗", "sunroof")
@@ -290,6 +293,37 @@ class GWMWindshieldHeatSensor(GWMBinarySensorMultiBase):
         if not self.coordinator.data:
             return None
         return self.coordinator.data.get("parsed_data", {}).get("windshield_heat")
+
+
+# ===== 灯光(熄火时 "--"→未知,启动后 "0"=关,"1"=开) =====
+class GWMLowBeamSensor(GWMBinarySensorMultiBase):
+    """近光灯。"""
+
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry, "近光灯", "low_beam")
+        self._attr_device_class = BinarySensorDeviceClass.LIGHT
+        self._attr_icon = "mdi:car-light-dimmed"
+
+    @property
+    def is_on(self) -> bool | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("parsed_data", {}).get("low_beam")
+
+
+class GWMHighBeamSensor(GWMBinarySensorMultiBase):
+    """远光灯。"""
+
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry, "远光灯", "high_beam")
+        self._attr_device_class = BinarySensorDeviceClass.LIGHT
+        self._attr_icon = "mdi:car-light-high"
+
+    @property
+    def is_on(self) -> bool | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("parsed_data", {}).get("high_beam")
 
 
 # ===== 座椅 / 方向盘 =====

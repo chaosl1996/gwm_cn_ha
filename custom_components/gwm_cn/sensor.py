@@ -55,6 +55,11 @@ async def async_setup_entry(
         # 引擎
         GWMEngineStateSensor(coordinator, config_entry),
         GWMGearSensor(coordinator, config_entry),
+        # 电源(power:熄火="0",上电后 1/2/3)
+        GWMPowerStateSensor(coordinator, config_entry),
+        # 能耗/电池
+        GWMAvgEnergyConsumptionSensor(coordinator, config_entry),
+        GWMBatteryVoltageSensor(coordinator, config_entry),
         # 胎压(写死:左前/右前/左后/右后 + 胎压)
         GWMTirePressureSensor(coordinator, config_entry, "fl", "左前胎压"),
         GWMTirePressureSensor(coordinator, config_entry, "fr", "右前胎压"),
@@ -298,6 +303,71 @@ class GWMGearSensor(GWMSensorBase):
         if gear is None:
             return None
         return self._GEAR_MAP.get(str(gear), f"档位_{gear}")
+
+
+# ===== 电源 =====
+class GWMPowerStateSensor(GWMSensorBase):
+    """电源状态。power("0"=下电,上电后 1/2/3;熄火停车时恒为"0")。"""
+
+    _POWER_MAP = {"0": "下电", "1": "ACC", "2": "ON", "3": "READY"}
+
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry, "电源状态", "power_state")
+        self._attr_icon = "mdi:power-standby"
+
+    @property
+    def native_value(self) -> str | None:
+        if not self.coordinator.data:
+            return None
+        state = self.coordinator.data.get("parsed_data", {}).get("power_state")
+        if state is None:
+            return None
+        s = str(state)
+        return self._POWER_MAP.get(s, f"上电_{s}")
+
+    @property
+    def icon(self) -> str:
+        if not self.coordinator.data:
+            return "mdi:power-standby"
+        s = str(self.coordinator.data.get("parsed_data", {}).get("power_state", "0"))
+        return "mdi:power" if s != "0" else "mdi:power-standby"
+
+
+# ===== 能耗 / 电池 =====
+class GWMAvgEnergyConsumptionSensor(GWMSensorBase):
+    """平均能耗 kWh/100km。avrgEgyCns(行驶后有值,熄火停车时 null 显示未知)。"""
+
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry, "平均能耗", "avg_energy_consumption")
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        # 混动模式的电耗,与「平均油耗」(L/100km)互补;单位为推测,启动后以实际值为准
+        self._attr_native_unit_of_measurement = "kWh/100km"
+        self._attr_icon = "mdi:flash"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("parsed_data", {}).get("avg_energy_consumption")
+
+
+class GWMBatteryVoltageSensor(GWMSensorBase):
+    """动力电池电压 V。bmsPackVolt(上电/充电后有值,熄火停车时 null 显示未知)。"""
+
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry, "动力电池电压", "battery_voltage")
+        self._attr_device_class = SensorDeviceClass.VOLTAGE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = "V"
+        self._attr_icon = "mdi:battery"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self) -> float | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("parsed_data", {}).get("battery_voltage")
 
 
 # ===== 胎压胎温(多实例:写死名字,防止所有 PRESSURE/TEMPERATURE 重名) =====

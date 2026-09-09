@@ -213,7 +213,7 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
       - bool 字段:True=激活/打开,False=未激活/关闭,None=未知
       - doors_locked:True=已锁,False=未锁
       - engine_state:"0"=熄火,"1"=启动中,"2"=运行
-      - 仅解析 HAR 中实际出现过非 null 值的字段,避免实体过多
+      - 灯光/能耗/电池电压等字段熄火时为 null/"--",启动后才有值(None 时实体显示未知)
     """
     info: Dict[str, Any] = {}
 
@@ -242,6 +242,10 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     info["ev_range"] = _parse_value_unit(charge.get("evContnsDistance"))
     # 额外实用:平均油耗(如有)
     info["avg_fuel_consumption"] = _parse_value_unit(vs.get("avgFuelConse"))
+    # 平均能耗 avrgEgyCns(混动的电耗,行驶后有值;熄火停车时为 null)
+    info["avg_energy_consumption"] = _parse_value_unit(vs.get("avrgEgyCns"))
+    # 动力电池电压 bmsPackVolt(上电/充电后有值;熄火停车时为 null)
+    info["battery_voltage"] = _parse_value_unit(vs.get("bmsPackVolt"))
 
     # ===== 温度 =====
     info["cabin_temp"] = _parse_value_unit(vs.get("cbnTemp"))
@@ -271,7 +275,8 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
 
     # ===== 车窗 / 天窗 =====
     # *WinPosnSts: "1"=关,"3"=开(值来自官方 APP 停车截图验证)
-    # skyLightSts: "3"=开/半开,"0"/"1"=关
+    # skyLightSts: "3"=关(锁车熄火实测:天窗关闭时值恰为"3",与车窗语义相反!)
+    #   打开/翘起的值尚未实测到,按 "0"/"1"/"2" 推测为开
     windows = vs.get("windows") or {}
     info["window_front_left"] = _str_to_bool(
         windows.get("lfWinPosnSts"), true_vals=("3",), false_vals=("1",)
@@ -286,7 +291,7 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
         windows.get("rbWinPosnSts"), true_vals=("3",), false_vals=("1",)
     )
     info["sunroof"] = _str_to_bool(
-        windows.get("skyLightSts"), true_vals=("3",), false_vals=("0", "1")
+        windows.get("skyLightSts"), true_vals=("0", "1", "2"), false_vals=("3",)
     )
     # 前挡风玻璃加热(区别于 frontFrost 前除霜)
     info["windshield_heat"] = _str_to_bool(windows.get("fWinHeatSts"))
@@ -296,6 +301,11 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     info["ac_auto_mode"] = _str_to_bool(vs.get("airConditionAutoModEnaSts"))
     info["front_defroster"] = _str_to_bool(vs.get("frontFrost"))
     info["rear_defroster"] = _str_to_bool(vs.get("backFrost"))
+
+    # ===== 灯光(熄火时返回 "--" → None 未知;启动后 "0"=关,"1"=开) =====
+    lighting = vs.get("lighting") or {}
+    info["low_beam"] = _str_to_bool(lighting.get("nearBeamSts"))
+    info["high_beam"] = _str_to_bool(lighting.get("farBeamSts"))
 
     # ===== 座椅 / 方向盘 =====
     info["steer_wheel_heat"] = _str_to_bool(vs.get("steerWheelHeat"))
