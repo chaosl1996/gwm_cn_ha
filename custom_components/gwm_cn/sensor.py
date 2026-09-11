@@ -152,7 +152,10 @@ class GWMFuelGaugeSensor(GWMSensorBase):
 
 
 class GWMHevBatteryPercentSensor(GWMSensorBase):
-    """混动(PHEV/HEV)高压动力电池电量 %。remainElectricPercent。"""
+    """混动(PHEV/HEV)高压动力电池电量 %。remainElectricPercent。
+
+    纯燃油车(Tank 300 燃油版)此字段恒为 null,默认禁用避免一直显示未知。
+    """
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry, "混动动力电池", "hev_battery_percent")
@@ -162,6 +165,7 @@ class GWMHevBatteryPercentSensor(GWMSensorBase):
         self._attr_native_unit_of_measurement = "%"
         self._attr_icon = "mdi:car-electric"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> float | None:
@@ -344,6 +348,8 @@ class GWMAvgEnergyConsumptionSensor(GWMSensorBase):
         self._attr_native_unit_of_measurement = "kWh/100km"
         self._attr_icon = "mdi:flash"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        # 纯燃油车恒为 null,默认禁用
+        self._attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> float | None:
@@ -362,6 +368,8 @@ class GWMBatteryVoltageSensor(GWMSensorBase):
         self._attr_native_unit_of_measurement = "V"
         self._attr_icon = "mdi:battery"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        # 高压电池电压(bmsPackVolt),纯燃油车恒为 null,默认禁用
+        self._attr_entity_registry_enabled_default = False
 
     @property
     def native_value(self) -> float | None:

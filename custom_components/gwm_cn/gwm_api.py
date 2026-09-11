@@ -70,6 +70,32 @@ def _str_to_bool(
     return None
 
 
+def _window_pos_to_bool(value: Any, closed_val: str) -> Optional[bool]:
+    """车窗/天窗位置多态字段转 bool。
+
+    语义(参考 ha-gwm-ev 项目对同平台 BeanTech 的逆向结论):
+      指定的 closed_val = 关(实测:车窗"1"关/天窗"3"关),
+      其余任何有效数值 = 开(全开/半开/翘起等中间态),
+      null/"--" = None 未知。
+
+    用户实测:开窗后值并不是"3"(旧映射导致显示未知),
+    正确逻辑是「非关闭值即开」。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        s = str(int(value))
+    elif isinstance(value, str):
+        s = value.strip()
+    else:
+        return None
+    if s in ("--", "null", "NULL", ""):
+        return None
+    if s == closed_val:
+        return False
+    return True
+
+
 def _str_to_bool_inverted(value: Any) -> Optional[bool]:
     """反向语义:'0' 视为 True(已锁/已关),'1' 视为 False。
 
@@ -206,6 +232,19 @@ class GWMChinaClient:
         return result.get("data")
 
 
+def _norm_keys(obj: Any) -> Any:
+    """递归把所有 dict key 转小写。
+
+    v2.0 网关(apgdm)返回 camelCase,v3.0 网关(gw-app-gateway)
+    返回的 key 大小写不一致,统一转小写后用小写 key 解析,两版通吃。
+    """
+    if isinstance(obj, dict):
+        return {k.lower(): _norm_keys(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_norm_keys(i) for i in obj]
+    return obj
+
+
 def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     """解析 CN 版车辆状态数据(扁平 JSON 结构)。
 
@@ -214,129 +253,132 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
       - doors_locked:True=已锁,False=未锁
       - engine_state:"0"=熄火,"1"=启动中,"2"=运行
       - 灯光/能耗/电池电压等字段熄火时为 null/"--",启动后才有值(None 时实体显示未知)
+      - v2.0/v3.0 网关 key 大小写不一致:先统一转小写再解析
     """
     info: Dict[str, Any] = {}
 
     if not data:
         return info
 
-    # ===== 顶级字段 =====
-    info["acquisition_time"] = data.get("acquisitionTime")
-    info["gps_switch_on"] = data.get("gpsSwitchOn")
-    info["tbox_status"] = data.get("tboxStatus")
-    info["fuel_gauge"] = data.get("oilQty")  # 0-8 格油表
+    data = _norm_keys(data)
 
-    vs = data.get("vehicleStatusInfo") or {}
+    # ===== 顶级字段 =====
+    info["acquisition_time"] = data.get("acquisitiontime")
+    info["gps_switch_on"] = data.get("gpsswitchon")
+    info["tbox_status"] = data.get("tboxstatus")
+    info["fuel_gauge"] = data.get("oilqty")  # 0-8 格油表
+
+    vs = data.get("vehiclestatusinfo") or {}
 
     # ===== 油电 =====
     # remainOil: 剩余油量(L)
-    info["fuel_volume"] = _parse_value_unit(vs.get("remainOil"))
+    info["fuel_volume"] = _parse_value_unit(vs.get("remainoil"))
     # preMileage(顶级):综合续航(油+电)km,与 APP 截图「续航里程」一致
-    info["fuel_range"] = _parse_value_unit(vs.get("preMileage"))
+    info["fuel_range"] = _parse_value_unit(vs.get("premileage"))
     # remainElectricPercent: PHEV 电池电量 %(不是油表油量!)
-    info["battery_percent"] = _parse_value_unit(vs.get("remainElectricPercent"))
+    info["battery_percent"] = _parse_value_unit(vs.get("remainelectricpercent"))
     # mileage:行驶总里程 km(与 APP 截图一致)
     info["mileage"] = _parse_value_unit(vs.get("mileage"))
     # charge.evContnsDistance:纯电续航 km(仅 PHEV 有,HEV 此值 null)
     charge = vs.get("charge") or {}
-    info["ev_range"] = _parse_value_unit(charge.get("evContnsDistance"))
+    info["ev_range"] = _parse_value_unit(charge.get("evcontnsdistance"))
     # 额外实用:平均油耗(如有)
-    info["avg_fuel_consumption"] = _parse_value_unit(vs.get("avgFuelConse"))
+    info["avg_fuel_consumption"] = _parse_value_unit(vs.get("avgfuelconse"))
     # 平均能耗 avrgEgyCns(混动的电耗,行驶后有值;熄火停车时为 null)
-    info["avg_energy_consumption"] = _parse_value_unit(vs.get("avrgEgyCns"))
+    info["avg_energy_consumption"] = _parse_value_unit(vs.get("avrgegycns"))
     # 动力电池电压 bmsPackVolt(上电/充电后有值;熄火停车时为 null)
-    info["battery_voltage"] = _parse_value_unit(vs.get("bmsPackVolt"))
+    info["battery_voltage"] = _parse_value_unit(vs.get("bmspackvolt"))
 
     # ===== 温度 =====
-    info["cabin_temp"] = _parse_value_unit(vs.get("cbnTemp"))
+    info["cabin_temp"] = _parse_value_unit(vs.get("cbntemp"))
 
     # ===== 引擎 / 档位 =====
-    info["engine_state"] = vs.get("engineSts")
+    info["engine_state"] = vs.get("enginests")
     info["power_state"] = vs.get("power")
-    info["gear"] = vs.get("hcuGearSts")
+    info["gear"] = vs.get("hcugearsts")
 
     # ===== 门锁 =====
     # esclLocksts 或 mainDrveDoorLockSts:"0"=已锁
-    info["doors_locked"] = _str_to_bool_inverted(vs.get("esclLocksts"))
+    info["doors_locked"] = _str_to_bool_inverted(vs.get("escllocksts"))
     if info["doors_locked"] is None:
         door = vs.get("door") or {}
         info["doors_locked"] = _str_to_bool_inverted(
-            door.get("mainDrveDoorLockSts")
+            door.get("maindrvedoorlocksts")
         )
 
     # ===== 车门("1"=开,"0"=关) =====
     door = vs.get("door") or {}
-    info["door_front_left"] = _str_to_bool(door.get("mainDrveDoorSts"))
-    info["door_front_right"] = _str_to_bool(door.get("viceDoorSts"))
-    info["door_rear_left"] = _str_to_bool(door.get("lbDoorSts"))
-    info["door_rear_right"] = _str_to_bool(door.get("rbDoorSts"))
-    info["door_trunk"] = _str_to_bool(door.get("backDoorSts"))
-    info["hood"] = _str_to_bool(vs.get("engineDoorSts"))
+    info["door_front_left"] = _str_to_bool(door.get("maindrvedoorsts"))
+    info["door_front_right"] = _str_to_bool(door.get("vicedoorsts"))
+    info["door_rear_left"] = _str_to_bool(door.get("lbdoorsts"))
+    info["door_rear_right"] = _str_to_bool(door.get("rbdoorsts"))
+    info["door_trunk"] = _str_to_bool(door.get("backdoorsts"))
+    info["hood"] = _str_to_bool(vs.get("enginedoorsts"))
 
     # ===== 车窗 / 天窗 =====
-    # *WinPosnSts: "1"=关,"3"=开(值来自官方 APP 停车截图验证)
-    # skyLightSts: "3"=关(锁车熄火实测:天窗关闭时值恰为"3",与车窗语义相反!)
-    #   打开/翘起的值尚未实测到,按 "0"/"1"/"2" 推测为开
+    # *WinPosnSts: "1"=关,其余值=开(实测关窗为"1";开窗的值非"3"故旧映射显示未知,
+    #   参考同平台逆向项目 ha-gwm-ev: 1=关,其余≥0=开)
+    # skyLightSts: "3"=关(锁车熄火实测),其余值=开
     windows = vs.get("windows") or {}
-    info["window_front_left"] = _str_to_bool(
-        windows.get("lfWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    info["window_front_left"] = _window_pos_to_bool(
+        windows.get("lfwinposnsts"), closed_val="1"
     )
-    info["window_front_right"] = _str_to_bool(
-        windows.get("rfWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    info["window_front_right"] = _window_pos_to_bool(
+        windows.get("rfwinposnsts"), closed_val="1"
     )
-    info["window_rear_left"] = _str_to_bool(
-        windows.get("lbWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    info["window_rear_left"] = _window_pos_to_bool(
+        windows.get("lbwinposnsts"), closed_val="1"
     )
-    info["window_rear_right"] = _str_to_bool(
-        windows.get("rbWinPosnSts"), true_vals=("3",), false_vals=("1",)
+    info["window_rear_right"] = _window_pos_to_bool(
+        windows.get("rbwinposnsts"), closed_val="1"
     )
-    info["sunroof"] = _str_to_bool(
-        windows.get("skyLightSts"), true_vals=("0", "1", "2"), false_vals=("3",)
+    info["sunroof"] = _window_pos_to_bool(
+        windows.get("skylightsts"), closed_val="3"
     )
     # 前挡风玻璃加热(区别于 frontFrost 前除霜)
-    info["windshield_heat"] = _str_to_bool(windows.get("fWinHeatSts"))
+    info["windshield_heat"] = _str_to_bool(windows.get("fwinheatsts"))
 
     # ===== 空调 / 除霜 / 自动模式 =====
-    info["air_conditioner"] = _str_to_bool(vs.get("airConditionSts"))
-    info["ac_auto_mode"] = _str_to_bool(vs.get("airConditionAutoModEnaSts"))
-    info["front_defroster"] = _str_to_bool(vs.get("frontFrost"))
-    info["rear_defroster"] = _str_to_bool(vs.get("backFrost"))
+    info["air_conditioner"] = _str_to_bool(vs.get("airconditionsts"))
+    info["ac_auto_mode"] = _str_to_bool(vs.get("airconditionautomodenasts"))
+    info["front_defroster"] = _str_to_bool(vs.get("frontfrost"))
+    info["rear_defroster"] = _str_to_bool(vs.get("backfrost"))
 
     # ===== 灯光(熄火时返回 "--" → None 未知;启动后 "0"=关,"1"=开) =====
     lighting = vs.get("lighting") or {}
-    info["low_beam"] = _str_to_bool(lighting.get("nearBeamSts"))
-    info["high_beam"] = _str_to_bool(lighting.get("farBeamSts"))
+    info["low_beam"] = _str_to_bool(lighting.get("nearbeamsts"))
+    info["high_beam"] = _str_to_bool(lighting.get("farbeamsts"))
 
     # ===== 座椅 / 方向盘 =====
-    info["steer_wheel_heat"] = _str_to_bool(vs.get("steerWheelHeat"))
+    info["steer_wheel_heat"] = _str_to_bool(vs.get("steerwheelheat"))
     seat = vs.get("seat") or {}
-    info["seat_heat_driver"] = _str_to_bool(seat.get("mainDriverSeatHeatSts"))
-    info["seat_vent_driver"] = _str_to_bool(seat.get("mainDriverSeatVentSts"))
-    info["seat_heat_passenger"] = _str_to_bool(seat.get("viceSeatHeatSts"))
-    info["seat_vent_passenger"] = _str_to_bool(seat.get("viceSeatVentSts"))
-    info["seat_heat_rear_left"] = _str_to_bool(seat.get("lbSeatHeatSts"))
-    info["seat_heat_rear_right"] = _str_to_bool(seat.get("rbSeatHeatSts"))
+    info["seat_heat_driver"] = _str_to_bool(seat.get("maindriverseatheatsts"))
+    info["seat_vent_driver"] = _str_to_bool(seat.get("maindriverseatventsts"))
+    info["seat_heat_passenger"] = _str_to_bool(seat.get("viceseatheatsts"))
+    info["seat_vent_passenger"] = _str_to_bool(seat.get("viceseatventsts"))
+    info["seat_heat_rear_left"] = _str_to_bool(seat.get("lbseatheatsts"))
+    info["seat_heat_rear_right"] = _str_to_bool(seat.get("rbseatheatsts"))
 
     # ===== 胎压(lf=前左, rf=前右, lb=后左, rb=后右) =====
-    tire_press = vs.get("tirePress") or {}
+    tire_press = vs.get("tirepress") or {}
     pos_map = [("fl", "lf"), ("fr", "rf"), ("rl", "lb"), ("rr", "rb")]
     for pos, prefix in pos_map:
         info[f"tire_pressure_{pos}"] = _parse_value_unit(
-            tire_press.get(f"{prefix}TirePressVal")
+            tire_press.get(f"{prefix}tirepressval")
         )
         info[f"tire_pressure_alarm_{pos}"] = _str_to_bool(
-            tire_press.get(f"{prefix}TirePressIndcrSts")
+            tire_press.get(f"{prefix}tirepressindcrsts")
         )
 
     # ===== 胎温 =====
-    tire_temp = vs.get("tireTemp") or {}
+    tire_temp = vs.get("tiretemp") or {}
     for pos, prefix in pos_map:
         info[f"tire_temp_{pos}"] = _parse_value_unit(
-            tire_temp.get(f"{prefix}TireTempVal")
+            tire_temp.get(f"{prefix}tiretempval")
         )
 
     # ===== 安全 =====
-    info["antitheft"] = _str_to_bool(vs.get("vehicleAntitheftStatus"))
-    info["oil_alarm"] = _str_to_bool(vs.get("oilAlarmSts"))
+    info["antitheft"] = _str_to_bool(vs.get("vehicleantitheftstatus"))
+    info["oil_alarm"] = _str_to_bool(vs.get("oilalarmsts"))
 
     return info
