@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "GWM China",
+        "description": "Enter the phone number registered in the Tank app. A dedicated account is strongly recommended (do not reuse the account logged in on your phone).",
+        "data": {
+          "phone": "Phone number (mainland China, 11 digits)"
+        }
+      },
+      "sms": {
+        "title": "SMS verification code",
+        "description": "A code was sent to {phone}. Enter it within a few minutes.",
+        "data": {
+          "code": "SMS verification code"
+        }
+      },
+      "vehicle": {
+        "title": "Select vehicle",
+        "description": "Multiple vehicles are bound to this account. Select the one to add.",
+        "data": {
+          "vin": "Vehicle"
+        }
+      }
+    },
+    "error": {
+      "invalid_phone": "Invalid phone number (11 digits starting with 1)",
+      "risk_control": "Risk control triggered: sign in once with this account in the official Tank app, then try again",
+      "code_rejected": "Verification code is wrong or expired. Request a new one.",
+      "no_vehicles": "No vehicles bound to this account",
+      "cannot_connect": "Cannot connect to the GWM server. Try again later.",
+      "invalid_auth": "Authentication failed",
+      "unknown": "Unexpected error. Check the logs for a traceback (search for gwm_cn)."
+    },
+    "abort": {
+      "already_configured": "This vehicle is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "GWM China options",
+        "description": "Polling interval and remote control toggle. Remote control can start the engine — park somewhere safe and ventilated.",
+        "data": {
+          "poll_interval": "Polling interval (seconds, 30-3600)",
+          "enable_remote": "Enable remote control (lock/climate/engine start — real vehicle commands)"
+        }
+      }
+    },
+    "error": {
+      "invalid_interval": "Interval must be between 30 and 3600 seconds"
+    }
+  }
+}
