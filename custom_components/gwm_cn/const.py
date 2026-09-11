@@ -3,7 +3,7 @@ from __future__ import annotations
 
 # 集成 domain 与版本
 DOMAIN = "gwm_cn"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 # 数据更新间隔(秒)。CN 网关有华为云 WAF,过于频繁可能被拦,先取 60s
 UPDATE_INTERVAL = 60

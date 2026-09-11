@@ -130,7 +130,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not self._vehicles:
                     errors["base"] = "no_vehicles"
                 elif len(self._vehicles) == 1:
-                    return self._finish(self._vehicles[0])
+                    return await self._finish(self._vehicles[0])
                 else:
                     return await self.async_step_vehicle()
 
@@ -151,7 +151,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vin = user_input.get(CONF_VIN)
             for vehicle in self._vehicles:
                 if vehicle["vin"] == vin:
-                    return self._finish(vehicle)
+                    return await self._finish(vehicle)
             errors["base"] = "unknown"
 
         vehicle_options = {
@@ -164,15 +164,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    def _finish(self, vehicle: dict[str, Any]) -> FlowResult:
+    async def _finish(self, vehicle: dict[str, Any]) -> FlowResult:
         """登录成功,创建 config entry。"""
         assert self._client is not None
         vin = vehicle["vin"]
         model = vehicle.get("series_name") or vehicle.get("model_name") or DEFAULT_MODEL
 
         # 验证车况接口可用(顺手触发一次完整查询)
+        # ⚠️ 必须放 executor:get_status 是阻塞 requests 调用,
+        # 在事件循环里直接调会被新版 HA 检测并抛 RuntimeError
         try:
-            self._client.get_status(vin)
+            await self.hass.async_add_executor_job(self._client.get_status, vin)
         except (GWMCNAuthError, GWMCNConnectionError, GWMCNSchemaError) as exc:
             _LOGGER.warning("登录后首次车况查询失败(不影响创建): %s", exc)
 
