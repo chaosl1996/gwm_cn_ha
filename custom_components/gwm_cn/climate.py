@@ -1,17 +1,14 @@
 """Climate platform for GWM China(远程空调)。
 
-通过 BeanTech T5 远控实现远程开/关空调:
-  - 开:AIR_CONDITIONER_START {allowStartEng:1, operationTime, temperature}
-    allowStartEng=1 表示允许远程启动发动机 —— 燃油车(坦克300 燃油版)夏天预冷/
-    冬天预热必须着车才能出风,这与官方 APP 行为一致。
-  - 关:AIR_CONDITIONER_STOP
+beantech 平台:AIR_CONDITIONER_START {allowStartEng:1, operationTime, temperature},
+17-31℃ 可设定温度,allowStartEng=1 表示允许远程启动发动机。
 
-温度范围 17-31℃ 整数(官方 APP 限制,ha-gwm-ev 实测校验)。
-当前温度来自车况的「车厢温度」cbnTemp;运行状态来自 airConditionSts。
-目标温度仅存本地(车况接口不回报设定温度),重启后通过 RestoreEntity 恢复。
+gtsp 平台(2026 款坦克300 实测):AutoAI 通道无空调专用指令,
+开/关映射为 远程启动/远程熄火(cmdCode 15/16),车辆按车内上次空调
+设定着车出风;温度滑条仅本地记录,不下发。
 
-注意:官方远控有时长(默认 15 分钟,到时自动关闭),开启后以车况轮询
-airConditionSts 为准显示真实状态。
+当前温度来自车况的「车厢温度」,运行状态来自 airConditionSts。
+目标温度本地保存(RestoreEntity 重启恢复)。
 """
 from __future__ import annotations
 
@@ -38,6 +35,8 @@ from .const import (
     AC_MIN_TEMP,
     CMD_AIR_CONDITIONER_START,
     CMD_AIR_CONDITIONER_STOP,
+    CMD_ENGINE_START,
+    CMD_ENGINE_STOP,
     DOMAIN,
     VERSION,
 )
@@ -50,24 +49,19 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """装载 climate 平台。gtsp 平台(AutoAI 通道)没有空调指令,跳过创建。"""
+    """装载 climate 平台。"""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
 
+    platform = ""
     if coordinator.supports_remote:
         try:
             platform = await hass.async_add_executor_job(
                 coordinator.client.get_platform, coordinator.vin
             )
-        except Exception:  # noqa: BLE001 - 探测失败按创建兜底
+        except Exception:  # noqa: BLE001 - 探测失败按通用处理
             platform = ""
-        if platform == "gtsp":
-            _LOGGER.info(
-                "检测到 gtsp 平台,远程空调不可用(AutoAI 通道无空调指令,"
-                "预热/预冷可用「远程启动」按钮替代),跳过创建 climate 实体"
-            )
-            return
 
-    async_add_entities([GWMRemoteClimate(coordinator, config_entry)])
+    async_add_entities([GWMRemoteClimate(coordinator, config_entry, platform)])
 
 
 class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
@@ -84,11 +78,18 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT_COOL]
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
 
-    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        coordinator,
+        config_entry: ConfigEntry,
+        platform: str = "",
+    ) -> None:
         super().__init__(coordinator)
         self.config_entry = config_entry
         self._attr_unique_id = f"{coordinator.vin}_remote_ac"
         self._attr_target_temperature = AC_DEFAULT_TEMP
+        # 平台路由:gtsp 走「远程启动/熄火」映射,其余走空调专用指令
+        self._platform = (platform or "").lower()
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -148,22 +149,41 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
             raise HomeAssistantError(f"不支持的空调模式: {hvac_mode}")
 
     async def _send_start(self) -> None:
+        if self._platform == "gtsp":
+            # gtsp(AutoAI 通道)无空调专用指令:开 = 远程启动(cmdCode 15),
+            # 车辆按车内上次空调设定着车出风;温度无下发通道,仅本地记录
+            control_type, cmd_body = CMD_ENGINE_START, {
+                "operationTime": AC_DEFAULT_DURATION_SECONDS,
+            }
+        else:
+            control_type, cmd_body = CMD_AIR_CONDITIONER_START, {
+                "allowStartEng": 1,
+                "operationTime": AC_DEFAULT_DURATION_SECONDS,
+                "temperature": self._attr_target_temperature,
+            }
         try:
-            await self.coordinator.async_send_remote_command(
-                CMD_AIR_CONDITIONER_START,
-                {
-                    "allowStartEng": 1,
-                    "operationTime": AC_DEFAULT_DURATION_SECONDS,
-                    "temperature": self._attr_target_temperature,
-                },
-            )
+            await self.coordinator.async_send_remote_command(control_type, cmd_body)
         except Exception as exc:  # noqa: BLE001
             raise HomeAssistantError(str(exc)) from exc
         await self.coordinator.async_request_refresh()
 
     async def _send_stop(self) -> None:
+        if self._platform == "gtsp":
+            control_type = CMD_ENGINE_STOP
+        else:
+            control_type = CMD_AIR_CONDITIONER_STOP
         try:
-            await self.coordinator.async_send_remote_command(CMD_AIR_CONDITIONER_STOP)
+            await self.coordinator.async_send_remote_command(control_type)
         except Exception as exc:  # noqa: BLE001
             raise HomeAssistantError(str(exc)) from exc
         await self.coordinator.async_request_refresh()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        attrs = {"平台": self._platform or "未知"}
+        if self._platform == "gtsp":
+            attrs["说明"] = (
+                "gtsp 平台:开/关映射为 远程启动/远程熄火(15分钟),"
+                "空调温度以车内上次设定为准,此处温度仅本地记录"
+            )
+        return attrs
