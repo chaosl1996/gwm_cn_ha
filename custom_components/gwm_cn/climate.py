@@ -50,8 +50,23 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """装载 climate 平台。"""
+    """装载 climate 平台。gtsp 平台(AutoAI 通道)没有空调指令,跳过创建。"""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
+
+    if coordinator.supports_remote:
+        try:
+            platform = await hass.async_add_executor_job(
+                coordinator.client.get_platform, coordinator.vin
+            )
+        except Exception:  # noqa: BLE001 - 探测失败按创建兜底
+            platform = ""
+        if platform == "gtsp":
+            _LOGGER.info(
+                "检测到 gtsp 平台,远程空调不可用(AutoAI 通道无空调指令,"
+                "预热/预冷可用「远程启动」按钮替代),跳过创建 climate 实体"
+            )
+            return
+
     async_add_entities([GWMRemoteClimate(coordinator, config_entry)])
 
 

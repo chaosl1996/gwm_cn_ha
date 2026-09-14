@@ -367,6 +367,8 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     info["steer_wheel_heat"] = _str_to_bool(
         _first(vs.get("steerwheelheat"), vs.get("steerwheelheatdsts"))
     )
+    # 座舱清洁/净化运行中(gtsp 字段 cabinclean)
+    info["cabin_clean"] = _str_to_bool(vs.get("cabinclean"))
     seat = vs.get("seat") or {}
     info["seat_heat_driver"] = _str_to_bool(seat.get("maindriverseatheatsts"))
     info["seat_vent_driver"] = _str_to_bool(seat.get("maindriverseatventsts"))

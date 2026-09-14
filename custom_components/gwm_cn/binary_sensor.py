@@ -61,6 +61,7 @@ async def async_setup_entry(
         GWMHighBeamSensor(coordinator, config_entry),
         # 座椅/方向盘(写死中文名,避免全部变成「过热」「运行」)
         GWMSteerWheelHeatSensor(coordinator, config_entry),
+        GWMCabinCleanSensor(coordinator, config_entry),
         GWMSeatHeatSensor(coordinator, config_entry, "driver", "主驾座椅加热"),
         GWMSeatVentSensor(coordinator, config_entry, "driver", "主驾座椅通风"),
         GWMSeatHeatSensor(coordinator, config_entry, "passenger", "副驾座椅加热"),
@@ -365,6 +366,22 @@ class GWMSeatHeatSensor(GWMBinarySensorMultiBase):
             self.coordinator.data.get("parsed_data", {})
             .get(f"seat_heat_{self.seat}")
         )
+
+
+class GWMCabinCleanSensor(GWMBinarySensorMultiBase):
+    """座舱清洁/净化运行中(gtsp 字段 cabinclean)。"""
+
+    def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry, "座舱清洁", "cabin_clean")
+        self._attr_device_class = BinarySensorDeviceClass.RUNNING
+        self._attr_icon = "mdi:air-purifier"
+        self._attr_entity_registry_enabled_default = False
+
+    @property
+    def is_on(self) -> bool | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get("parsed_data", {}).get("cabin_clean")
 
 
 class GWMSeatVentSensor(GWMBinarySensorMultiBase):

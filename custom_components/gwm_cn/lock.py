@@ -81,9 +81,9 @@ class GWMDoorLock(CoordinatorEntity, LockEntity):
 
     async def _send_command(self, control_type: str) -> None:
         try:
-            seq_no = await self.coordinator.async_send_remote_command(control_type)
+            command_id = await self.coordinator.async_send_remote_command(control_type)
         except Exception as exc:  # noqa: BLE001
             raise HomeAssistantError(str(exc)) from exc
-        _LOGGER.info("门锁远控已发送(%s),seqNo=%s", control_type, seq_no)
+        _LOGGER.info("门锁远控已发送(%s),命令标识=%s", control_type, command_id)
         # 远控执行有延迟,稍后主动刷新一次状态
         await self.coordinator.async_request_refresh()
