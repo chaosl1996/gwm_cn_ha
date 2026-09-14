@@ -277,20 +277,24 @@ class GWMChinaUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except GWMCNRiskControlError as exc:
             raise UpdateFailed(str(exc)) from exc
         except GWMCNAuthError as exc:
-            # token 失效 → 自动刷新后重试一次
-            _LOGGER.info("GWM CN token 失效(%s),尝试自动刷新", exc)
+            # token 失效 → 自动恢复(先重初始化短命会话,再 refreshToken)后重试一次
+            _LOGGER.info("GWM CN 会话失效(%s),尝试自动恢复", exc)
             try:
-                await self.hass.async_add_executor_job(client.refresh)
-                # 刷新成功,把新状态回写到 config entry 持久化
+                await self.hass.async_add_executor_job(client.recover_session)
+                # 恢复成功,把新状态回写到 config entry 持久化
                 self._persist_auth_state(client)
             except (GWMCNAuthError, GWMCNConnectionError, GWMCNSchemaError, OSError) as refresh_exc:
+                # refreshToken 也死了 → 触发 reauth 流程(集成卡片出现「需要重新配置」,
+                # 用户点进去重新走一遍短信即可,不用删除集成)
+                if self.config_entry is not None:
+                    self.config_entry.async_start_reauth(self.hass)
                 raise UpdateFailed(
-                    f"token 自动刷新失败({refresh_exc}),请重新添加集成走短信登录"
+                    f"登录已彻底失效({refresh_exc}),请到集成卡片点「重新配置」重新短信验证"
                 ) from refresh_exc
             try:
                 data = await self.hass.async_add_executor_job(client.get_status, self.vin)
             except (GWMCNAuthError, GWMCNConnectionError, GWMCNSchemaError, OSError) as exc:
-                raise UpdateFailed(f"刷新后查询仍失败: {exc}") from exc
+                raise UpdateFailed(f"恢复后查询仍失败: {exc}") from exc
         except (GWMCNConnectionError, GWMCNSchemaError, OSError) as exc:
             raise UpdateFailed(f"GWM CN 请求失败: {exc}") from exc
 

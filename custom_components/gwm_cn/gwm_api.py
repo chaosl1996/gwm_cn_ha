@@ -245,6 +245,14 @@ def _norm_keys(obj: Any) -> Any:
     return obj
 
 
+def _first(*values: Any) -> Any:
+    """返回第一个非 None 的值(新旧网关字段名/层级兜底)。"""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     """解析 CN 版车辆状态数据(扁平 JSON 结构)。
 
@@ -254,6 +262,10 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
       - engine_state:"0"=熄火,"1"=启动中,"2"=运行
       - 灯光/能耗/电池电压等字段熄火时为 null/"--",启动后才有值(None 时实体显示未知)
       - v2.0/v3.0 网关 key 大小写不一致:先统一转小写再解析
+      - gtsp 平台(2026 款坦克300 实测)若干字段改名/挪层,用 _first 兜底:
+          车厢温度 cbnTemp→inCarTemperature,档位 hcuGearSts→gearSts,
+          油表/GPS开关/TBOX 从顶层挪入 vehicleStatusInfo,胎压报警
+          *TirePressIndcrSts→*TirePressSts,方向盘加热 steerWheelHeat→steerWheelHeatDst
     """
     info: Dict[str, Any] = {}
 
@@ -262,13 +274,13 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
 
     data = _norm_keys(data)
 
-    # ===== 顶级字段 =====
-    info["acquisition_time"] = data.get("acquisitiontime")
-    info["gps_switch_on"] = data.get("gpsswitchon")
-    info["tbox_status"] = data.get("tboxstatus")
-    info["fuel_gauge"] = data.get("oilqty")  # 0-8 格油表
-
     vs = data.get("vehiclestatusinfo") or {}
+
+    # ===== 顶级字段(v3.0/gtsp 把油表/GPS开关/TBOX 挪进了 vehicleStatusInfo) =====
+    info["acquisition_time"] = _first(data.get("acquisitiontime"), vs.get("acquisitiontime"))
+    info["gps_switch_on"] = _first(vs.get("gpsswitchon"), data.get("gpsswitchon"))
+    info["tbox_status"] = _first(data.get("tboxstatus"), vs.get("tboxstate"), vs.get("tboxstatus"))
+    info["fuel_gauge"] = _first(vs.get("oilqty"), data.get("oilqty"))  # 0-8 格油表
 
     # ===== 油电 =====
     # remainOil: 剩余油量(L)
@@ -289,13 +301,13 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     # 动力电池电压 bmsPackVolt(上电/充电后有值;熄火停车时为 null)
     info["battery_voltage"] = _parse_value_unit(vs.get("bmspackvolt"))
 
-    # ===== 温度 =====
-    info["cabin_temp"] = _parse_value_unit(vs.get("cbntemp"))
+    # ===== 温度(gtsp 改名 inCarTemperature) =====
+    info["cabin_temp"] = _parse_value_unit(_first(vs.get("cbntemp"), vs.get("incartemperature")))
 
-    # ===== 引擎 / 档位 =====
+    # ===== 引擎 / 档位(gtsp 档位改名 gearSts) =====
     info["engine_state"] = vs.get("enginests")
     info["power_state"] = vs.get("power")
-    info["gear"] = vs.get("hcugearsts")
+    info["gear"] = _first(vs.get("hcugearsts"), vs.get("gearsts"))
 
     # ===== 门锁 =====
     # esclLocksts 或 mainDrveDoorLockSts:"0"=已锁
@@ -312,7 +324,7 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     info["door_front_right"] = _str_to_bool(door.get("vicedoorsts"))
     info["door_rear_left"] = _str_to_bool(door.get("lbdoorsts"))
     info["door_rear_right"] = _str_to_bool(door.get("rbdoorsts"))
-    info["door_trunk"] = _str_to_bool(door.get("backdoorsts"))
+    info["door_trunk"] = _str_to_bool(_first(door.get("backdoorsts"), door.get("tailgateopenupsts")))
     info["hood"] = _str_to_bool(vs.get("enginedoorsts"))
 
     # ===== 车窗 / 天窗 =====
@@ -338,9 +350,11 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     # 前挡风玻璃加热(区别于 frontFrost 前除霜)
     info["windshield_heat"] = _str_to_bool(windows.get("fwinheatsts"))
 
-    # ===== 空调 / 除霜 / 自动模式 =====
+    # ===== 空调 / 除霜 / 自动模式(gtsp 自动模式改名 acAutoModeSts) =====
     info["air_conditioner"] = _str_to_bool(vs.get("airconditionsts"))
-    info["ac_auto_mode"] = _str_to_bool(vs.get("airconditionautomodenasts"))
+    info["ac_auto_mode"] = _str_to_bool(
+        _first(vs.get("airconditionautomodenasts"), vs.get("acautomodests"))
+    )
     info["front_defroster"] = _str_to_bool(vs.get("frontfrost"))
     info["rear_defroster"] = _str_to_bool(vs.get("backfrost"))
 
@@ -349,8 +363,10 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
     info["low_beam"] = _str_to_bool(lighting.get("nearbeamsts"))
     info["high_beam"] = _str_to_bool(lighting.get("farbeamsts"))
 
-    # ===== 座椅 / 方向盘 =====
-    info["steer_wheel_heat"] = _str_to_bool(vs.get("steerwheelheat"))
+    # ===== 座椅 / 方向盘(gtsp 方向盘加热改名 steerWheelHeatDst) =====
+    info["steer_wheel_heat"] = _str_to_bool(
+        _first(vs.get("steerwheelheat"), vs.get("steerwheelheatdsts"))
+    )
     seat = vs.get("seat") or {}
     info["seat_heat_driver"] = _str_to_bool(seat.get("maindriverseatheatsts"))
     info["seat_vent_driver"] = _str_to_bool(seat.get("maindriverseatventsts"))
@@ -366,8 +382,12 @@ def parse_vehicle_status(data: Dict[str, Any]) -> Dict[str, Any]:
         info[f"tire_pressure_{pos}"] = _parse_value_unit(
             tire_press.get(f"{prefix}tirepressval")
         )
+        # gtsp 把报警字段改名为 *TirePressSts(旧名 *TirePressIndcrSts)
         info[f"tire_pressure_alarm_{pos}"] = _str_to_bool(
-            tire_press.get(f"{prefix}tirepressindcrsts")
+            _first(
+                tire_press.get(f"{prefix}tirepressindcrsts"),
+                tire_press.get(f"{prefix}tirepresssts"),
+            )
         )
 
     # ===== 胎温 =====

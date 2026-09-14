@@ -281,12 +281,16 @@ class GWMRearDefrosterSensor(GWMBinarySensorMultiBase):
 
 
 class GWMWindshieldHeatSensor(GWMBinarySensorMultiBase):
-    """前挡风玻璃加热(与前除霜不同,加热丝不是吹热风)。"""
+    """前挡风玻璃加热(与前除霜不同,加热丝不是吹热风)。
+
+    gtsp 平台(2026 款坦克300)不上报 fWinHeatSts,默认禁用。
+    """
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry, "前风挡加热", "windshield_heat")
         self._attr_device_class = BinarySensorDeviceClass.HEAT
         self._attr_icon = "mdi:car-windshield"
+        self._attr_entity_registry_enabled_default = False
 
     @property
     def is_on(self) -> bool | None:
@@ -409,12 +413,16 @@ class GWMTirePressureAlarmSensor(GWMBinarySensorMultiBase):
 
 # ===== 安全(防盗/油量报警,虽然单实例但 PROBLEM device_class 会变成「问题」,所以写死名) =====
 class GWMAntitheftSensor(GWMBinarySensorMultiBase):
-    """防盗激活。"""
+    """防盗激活。
+
+    gtsp 平台(2026 款坦克300)不上报 vehicleAntitheftStatus,默认禁用。
+    """
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry, "防盗状态", "antitheft")
         self._attr_device_class = BinarySensorDeviceClass.PROBLEM
         self._attr_icon = "mdi:shield-lock"
+        self._attr_entity_registry_enabled_default = False
 
     @property
     def is_on(self) -> bool | None:

@@ -21,6 +21,13 @@
         "data": {
           "vin": "Vehicle"
         }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again to GWM China",
+        "description": "The login has expired (token lifetime ended, or the account was signed in elsewhere). A new SMS code will be sent to {phone}.",
+        "data": {
+          "phone": "Phone number (mainland China, 11 digits)"
+        }
       }
     },
     "error": {
@@ -33,7 +40,8 @@
       "unknown": "Unexpected error. Check the logs for a traceback (search for gwm_cn)."
     },
     "abort": {
-      "already_configured": "This vehicle is already configured"
+      "already_configured": "This vehicle is already configured",
+      "reauth_successful": "Re-authentication successful"
     }
   },
   "options": {

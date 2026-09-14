@@ -18,7 +18,9 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
+import threading
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote, unquote
@@ -26,6 +28,8 @@ from urllib.parse import quote, unquote
 import requests
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+_LOGGER = logging.getLogger(__name__)
 
 # ============================================================
 # 常量(均来自 ha-gwm-ev 对官方 APP 的逆向)
@@ -56,6 +60,8 @@ _BEAN_TECH_SEND_URL = _BEAN_TECH_BASE.rstrip("/") + _BEAN_TECH_SEND_PATH
 # 其余命令走 T5/sendCmd —— 均为 ha-gwm-ev 对官方 APP 抓包确认的行为
 _BEAN_TECH_TIMELY_PATH = "/app-api/api/v3.0/vehicle/remote-ctrl/timely"
 _BEAN_TECH_TIMELY_URL = _BEAN_TECH_BASE.rstrip("/") + _BEAN_TECH_TIMELY_PATH
+# AutoAI 直连通道(navinfo/gtsp 平台远控走这里)
+_AUTO_AI_DIRECT = "https://ti.gwm.com.cn:8443/tsp/ead"
 _BEAN_TECH_RESULT_PATH = "/app-api/api/v1.0/vehicle/getRemoteCtrlResultT5"
 _BEAN_TECH_RESULT_URL = _BEAN_TECH_BASE.rstrip("/") + _BEAN_TECH_RESULT_PATH
 
@@ -74,6 +80,23 @@ _AES_BLOCK_BYTES = algorithms.AES.block_size // 8
 
 # 鸣笛/闪灯类"即时"命令(走 remote-ctrl/timely,不带 cmdBody/isSaveConfig)
 _TIMELY_COMMANDS = frozenset({"WHISTLE", "FLASH", "WHISTLE_FLASH"})
+
+# AutoAI 通用指令通道(GW.M.SEND_COMMON_COMMAND)的 cmdCode 映射。
+# 适用于 navinfo / gtsp 平台(2026 款坦克300 = gtsp,实测 T5/sendCmd 返回 550002)。
+_AUTO_AI_CMD_CODES = {
+    "VEHICLE_UNLOCK": 1,
+    "VEHICLE_LOCK": 2,
+    "WINDOW_CLOSE": 3,
+    "WHISTLE_FLASH": 5,
+    "ENGINE_START": 15,
+    "ENGINE_STOP": 16,
+    "WHISTLE": 19,
+    "FLASH": 20,
+    "SKYLIGNT_CLOSE": 28,  # 官方 APP 拼写即如此
+}
+# 远程启动用单独的 function(官方 APP 行为)
+_AUTO_AI_OPEN_COMMAND = "GW.M.SET_AND_OPEN_COMMAND"
+_AUTO_AI_SEND_COMMAND = "GW.M.SEND_COMMON_COMMAND"
 
 
 # ============================================================
@@ -364,6 +387,15 @@ class GWMChinaAuthClient:
         self.bt_bean_id: Optional[str] = state.get("bt_bean_id")
         self.auto_token_id: Optional[str] = state.get("auto_token_id")
         self.auto_user_id: Optional[str] = state.get("auto_user_id")
+        # 车辆平台缓存: {vin: belongPlatform},按需从车辆列表拉取
+        # 已知取值: "beantech"(T5/sendCmd) / "navinfo"(AutoAI) / "gtsp"(长城新 TSP,实测 2026 款坦克300)
+        self._platform_cache: Dict[str, str] = {}
+        for v in state.get("platforms") or []:
+            if isinstance(v, dict) and v.get("vin"):
+                self._platform_cache[str(v["vin"]).upper()] = str(v.get("platform") or "")
+        # AutoAI/BeanTech 的 token 是短命会话(-101 缓存失效),过期需重新初始化;
+        # 加锁防止并发请求同时触发 refresh 造成 refreshToken 单次轮换互相顶掉
+        self._relogin_lock = threading.Lock()
 
     # ---------- 状态 ----------
     @property
@@ -397,7 +429,22 @@ class GWMChinaAuthClient:
             "bt_bean_id": self.bt_bean_id,
             "auto_token_id": self.auto_token_id,
             "auto_user_id": self.auto_user_id,
+            "platforms": [
+                {"vin": vin, "platform": plat}
+                for vin, plat in sorted(self._platform_cache.items())
+            ],
         }
+
+    # ============================================================
+    # 平台路由(gtsp/navinfo → AutoAI 通道;beantech → T5/sendCmd)
+    # ============================================================
+    def get_platform(self, vin: str) -> str:
+        """查询车辆平台;缓存未命中时拉一次车辆列表。"""
+        vin = (vin or "").strip().upper()
+        if vin not in self._platform_cache:
+            for v in self.get_vehicles():
+                self._platform_cache[v["vin"]] = (v.get("platform") or "").strip().lower()
+        return self._platform_cache.get(vin, "")
 
     # ============================================================
     # 登录链路(对外)
@@ -440,7 +487,7 @@ class GWMChinaAuthClient:
         self._initialize_services()
 
     def get_vehicles(self) -> list[Dict[str, Any]]:
-        """发现账号下的车辆列表(query-vehicle-list)。"""
+        """发现账号下的车辆列表(query-vehicle-list),并缓存平台归属。"""
         data = self._g_app_post(
             "acquire_vehicles", _DISCOVERY_URL, {"vehicleVersion": 13}, encrypt_body=False
         )
@@ -454,6 +501,7 @@ class GWMChinaAuthClient:
             vin = _ci_prop(item, "vin")
             if not vin:
                 continue
+            platform = str(_ci_prop(item, "belongPlatform") or "").strip()
             vehicles.append(
                 {
                     "vin": str(vin).upper(),
@@ -461,9 +509,10 @@ class GWMChinaAuthClient:
                     "series_name": _ci_prop(item, "appShowSeriesName"),
                     "nickname": _ci_prop(item, "vehicleNick"),
                     "brand_name": _ci_prop(item, "brandName"),
-                    "platform": _ci_prop(item, "belongPlatform"),
+                    "platform": platform,
                 }
             )
+            self._platform_cache[str(vin).upper()] = platform.lower()
         return vehicles
 
     # ============================================================
@@ -494,25 +543,74 @@ class GWMChinaAuthClient:
         control_type: str,
         cmd_body: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """发送 BeanTech 远控命令,返回 seqNo(可用于查询结果)。
+        """发送远控命令,返回命令标识(seqNo 或 transactionId)。
 
-        control_type 取值(BeanTech 平台已验证):
-          VEHICLE_LOCK / VEHICLE_UNLOCK / WINDOW_CLOSE /
-          WHISTLE / FLASH / WHISTLE_FLASH /
-          ENGINE_START / ENGINE_STOP / SKYLIGNT_CLOSE /
-          AIR_CONDITIONER_START / AIR_CONDITIONER_STOP /
-          DEFROST_FRONT_START / DEFROST_FRONT_STOP /
-          DEFROST_BACK_START / DEFROST_BACK_STOP /
-          STEERING_WHEEL_HEATING / STEERING_WHEEL_HEATLESS /
-          SEAT_HEATING_START / SEAT_HEATING_STOP /
-          SEAT_VENTILATION_START / SEAT_VENTILATION_STOP
-
-        WHISTLE/FLASH/WHISTLE_FLASH 是"即时"命令:走 remote-ctrl/timely 端点,
-        报文不带 cmdBody 和 isSaveConfig;其余走 T5/sendCmd。
+        会话过期(-101 缓存失效)时自动重新登录并重试一次。
         """
+        try:
+            return self._send_command_inner(vin, control_type, cmd_body)
+        except GWMCNAuthError as exc:
+            msg = str(exc)
+            if not ("会话" in msg or "-101" in msg or "认证失败" in msg):
+                raise
+            # 只对"会话失效"类错误重登重试,避免验证码错误等被误重试
+            _LOGGER.info("远控时会话失效(%s),自动恢复后重试", exc)
+            self.recover_session()
+            return self._send_command_inner(vin, control_type, cmd_body)
+
+    def recover_session(self) -> None:
+        """会话失效时按代价从低到高恢复:重初始化短命会话 → refreshToken 刷新。
+
+        全部失败抛 GWMCNAuthError,由上层触发 reauth 流程(需要重新短信验证)。
+        """
+        with self._relogin_lock:
+            try:
+                self._initialize_services()
+                return
+            except GWMCNAuthError as exc:
+                _LOGGER.info("短命会话重初始化失败(%s),尝试 refreshToken", exc)
+            except GWMCNSchemaError as exc:
+                _LOGGER.info("短命会话重初始化失败(%s),尝试 refreshToken", exc)
+            self.refresh()
+
+    def _send_command_inner(
+        self,
+        vin: str,
+        control_type: str,
+        cmd_body: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """按平台路由发送命令。"""
         vin = (vin or "").strip().upper()
         if not self.logged_in:
             raise GWMCNAuthError("未完成登录")
+
+        platform = ""
+        try:
+            platform = self.get_platform(vin)
+        except Exception:  # noqa: BLE001 - 平台探测失败时按未知处理,仍走 AutoAI
+            _LOGGER.warning("查询车辆平台失败,远控按 AutoAI 通道尝试")
+
+        if platform == "beantech":
+            return self._send_bean_tech_command(vin, control_type, cmd_body)
+
+        cmd_code = _AUTO_AI_CMD_CODES.get(control_type)
+        if cmd_code is None:
+            raise GWMCNAuthError(
+                f"平台 {platform or '未知'} 暂不支持 {control_type}:"
+                "gtsp 平台目前仅支持 锁车/解锁/关全车窗/鸣笛/闪灯/鸣笛闪灯/远程启动/熄火/关天窗"
+            )
+        function = (
+            _AUTO_AI_OPEN_COMMAND if control_type == "ENGINE_START" else _AUTO_AI_SEND_COMMAND
+        )
+        return self._send_auto_ai_command(vin, cmd_code, function)
+
+    def _send_bean_tech_command(
+        self,
+        vin: str,
+        control_type: str,
+        cmd_body: Optional[Dict[str, Any]],
+    ) -> str:
+        """BeanTech 平台:T5/sendCmd(controlType 字符串)+ timely(鸣笛闪灯)。"""
         seq_no = _random_sequence()
         timely = control_type in _TIMELY_COMMANDS
         if timely:
@@ -542,6 +640,60 @@ class GWMChinaAuthClient:
         )
         self._decode_g_app_response(resp, "send_cmd")
         return seq_no
+
+    def _send_auto_ai_command(self, vin: str, cmd_code: int, function: str) -> str:
+        """AutoAI 通用指令通道(navinfo/gtsp),返回 transactionId。"""
+        ts_ms = str(int(time.time() * 1000))
+        body = {
+            "flag": 1,
+            "signStr": hashlib.md5(
+                (vin + (self.auto_token_id or "")).encode("utf-8"),
+                usedforsecurity=False,
+            ).hexdigest(),
+            "userId": self.auto_user_id,
+            "userType": "0",
+            "vin": vin,
+            "cmdCode": cmd_code,
+        }
+        wrapper = {
+            "body": body,
+            "header": {
+                "brandType": "gwm",
+                "cVer": _SOURCE_APP_VERSION,
+                "fn": function,
+                "fv": "0202",
+                "mobileId": self.device_id,
+                "osType": "Android",
+                "osVer": "",
+                "rs": "2",
+                "ts": _china_timestamp(),
+                "tk": self.auto_token_id,
+                "v": "1.0",
+            },
+        }
+        payload = encode_dotnet_json(wrapper)
+        url = _AUTO_AI_DIRECT + "?p=" + quote(payload, safe="")
+        headers = {
+            "v": "1.0",
+            "cid": self.device_id,
+            "client": "phone",
+            "sign": auto_ai_sign(ts_ms),
+            "time": ts_ms,
+            "ckey": AUTO_AI_CKEY,
+            "protocolVer": "2.1.2",
+            "token": self.auto_token_id,
+            "brandType": "GWM",
+            "Accept-Encoding": "gzip",
+            "User-Agent": _OFFICIAL_USER_AGENT,
+        }
+        resp = self.session.get(
+            url, headers=headers, timeout=self.timeout, verify=self.verify_ssl,
+        )
+        result = self._decode_auto_ai_response(resp, "send_cmd")
+        transaction_id = _ci_prop(result, "transactionId")
+        if not transaction_id:
+            raise GWMCNSchemaError("AutoAI 远控响应缺少 transactionId")
+        return str(transaction_id)
 
     def get_command_result(self, vin: str, seq_no: str) -> Any:
         """查询远控命令执行结果(getRemoteCtrlResultT5)。"""

@@ -21,6 +21,13 @@
         "data": {
           "vin": "车辆"
         }
+      },
+      "reauth_confirm": {
+        "title": "重新登录 GWM China",
+        "description": "登录已失效(验证码/令牌过期或账号在别处登录被顶下线)。输入 {phone} 收取新的短信验证码以恢复集成。",
+        "data": {
+          "phone": "手机号(中国大陆 11 位)"
+        }
       }
     },
     "error": {
@@ -33,7 +40,8 @@
       "unknown": "未知错误,请查看日志"
     },
     "abort": {
-      "already_configured": "该车辆已经配置过"
+      "already_configured": "该车辆已经配置过",
+      "reauth_successful": "重新登录成功,集成已恢复"
     }
   },
   "options": {
@@ -53,27 +61,61 @@
   },
   "entity": {
     "sensor": {
-      "fuel_volume": {"name": "剩余油量"},
-      "fuel_range": {"name": "综合续航"},
-      "fuel_gauge": {"name": "油表格数"},
-      "hev_battery_percent": {"name": "混动动力电池"},
-      "ev_range": {"name": "纯电续航"},
-      "mileage": {"name": "行驶总里程"},
-      "avg_fuel_consumption": {"name": "平均油耗"},
-      "cabin_temp": {"name": "车厢温度"},
+      "fuel_volume": {
+        "name": "剩余油量"
+      },
+      "fuel_range": {
+        "name": "综合续航"
+      },
+      "fuel_gauge": {
+        "name": "油表格数"
+      },
+      "hev_battery_percent": {
+        "name": "混动动力电池"
+      },
+      "ev_range": {
+        "name": "纯电续航"
+      },
+      "mileage": {
+        "name": "行驶总里程"
+      },
+      "avg_fuel_consumption": {
+        "name": "平均油耗"
+      },
+      "cabin_temp": {
+        "name": "车厢温度"
+      },
       "engine_state": {
         "name": "引擎状态",
-        "state": {"off": "熄火", "starting": "启动中", "running": "运行中"}
+        "state": {
+          "off": "熄火",
+          "starting": "启动中",
+          "running": "运行中"
+        }
       },
-      "gear": {"name": "档位"},
-      "power_state": {"name": "电源状态"},
-      "avg_energy_consumption": {"name": "平均能耗"},
-      "battery_voltage": {"name": "动力电池电压"},
-      "last_update": {"name": "最后更新"},
-      "gps_switch": {"name": "GPS 开关"}
+      "gear": {
+        "name": "档位"
+      },
+      "power_state": {
+        "name": "电源状态"
+      },
+      "avg_energy_consumption": {
+        "name": "平均能耗"
+      },
+      "battery_voltage": {
+        "name": "动力电池电压"
+      },
+      "last_update": {
+        "name": "最后更新"
+      },
+      "gps_switch": {
+        "name": "GPS 开关"
+      }
     },
     "device_tracker": {
-      "vehicle_location": {"name": "车辆位置"}
+      "vehicle_location": {
+        "name": "车辆位置"
+      }
     }
   },
   "services": {

@@ -68,6 +68,47 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._phone: str = ""
         self._client: GWMChinaAuthClient | None = None
         self._vehicles: list[dict[str, Any]] = []
+        # reauth(登录失效重新配置)时指向原 config entry
+        self._reauth_entry: config_entries.ConfigEntry | None = None
+
+    async def async_step_reauth(self, entry_data):
+        """登录彻底失效(coordinator 触发)后的重新配置入口。"""
+        entry_id = self.context.get("entry_id")
+        self._reauth_entry = self.hass.config_entries.async_get_entry(entry_id)
+        self._phone = (entry_data or {}).get(CONF_PHONE, "")
+        self._client = GWMChinaAuthClient(self._phone)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """reauth 第一步:确认手机号并请求短信验证码。"""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            phone = (user_input.get(CONF_PHONE) or "").strip()
+            if not _is_valid_phone(phone):
+                errors["phone"] = "invalid_phone"
+            else:
+                self._phone = phone
+                self._client = GWMChinaAuthClient(phone)
+                try:
+                    await self.hass.async_add_executor_job(
+                        self._client.request_sms_code
+                    )
+                except GWMCNRiskControlError:
+                    errors["base"] = "risk_control"
+                except (GWMCNConnectionError, GWMCNSchemaError, OSError):
+                    errors["base"] = "cannot_connect"
+                else:
+                    return await self.async_step_sms()
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_PHONE, default=self._phone): str}
+            ),
+            errors=errors,
+            description_placeholders={"phone": self._phone},
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -127,6 +168,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("短信登录时未知异常")
                 errors["base"] = "unknown"
             else:
+                if self._reauth_entry is not None:
+                    # reauth:登录成功后更新原条目,不新建
+                    return self._finish_reauth()
                 if not self._vehicles:
                     errors["base"] = "no_vehicles"
                 elif len(self._vehicles) == 1:
@@ -187,6 +231,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_MODEL: model,
             },
         )
+
+    def _finish_reauth(self) -> FlowResult:
+        """reauth 成功:更新原条目的登录态并重载。"""
+        assert self._client is not None and self._reauth_entry is not None
+        entry = self._reauth_entry
+        new_data = dict(entry.data)
+        new_data[CONF_PHONE] = self._phone
+        new_data[CONF_AUTH_STATE] = self._client.state_dict()
+        self.hass.config_entries.async_update_entry(entry, data=new_data)
+        self.hass.async_create_task(
+            self.hass.config_entries.async_reload(entry.entry_id)
+        )
+        return self.async_abort(reason="reauth_successful")
 
     @staticmethod
     @callback
