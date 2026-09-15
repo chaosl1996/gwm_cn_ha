@@ -164,21 +164,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # 部分平台失败不 return False(避免 SetupFailed 重试撞 already been setup)
     try:
-        setup_result = await hass.config_entries.async_forward_entry_setups(
-            entry, PLATFORMS
-        )
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:  # noqa: BLE001
         _LOGGER.exception(
             "调用 async_forward_entry_setups(%s) 时抛了未预期异常!",
             [str(p) for p in PLATFORMS],
         )
-        setup_result = False
 
-    if not setup_result:
-        _LOGGER.error(
-            "以下 platform 中至少有一个加载失败: %s。集成仍以成功的 platform 继续运行。",
-            [str(p) for p in PLATFORMS],
-        )
+    # 注:新版 HA 的 async_forward_entry_setups 返回 None(无失败会抛异常),
+    # 不再依据返回值判断成败 —— HA 自己会为失败的 platform 打
+    # "Setup failed for xxx" 日志,不要在这里误报 ERROR。
 
     return True
 

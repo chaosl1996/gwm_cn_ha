@@ -602,7 +602,15 @@ class GWMChinaAuthClient:
         function = (
             _AUTO_AI_OPEN_COMMAND if control_type == "ENGINE_START" else _AUTO_AI_SEND_COMMAND
         )
-        return self._send_auto_ai_command(vin, cmd_code, function)
+        extra_body: Optional[Dict[str, Any]] = None
+        if control_type == "ENGINE_START":
+            # 远程启动必须带 engineParams(缺这个字段 AutoAI 报 -106 参数错误,
+            # 来自 ha-gwm-ev 对 navinfo 平台的抓包:runTime 为分钟数)
+            minutes = 15
+            if isinstance(cmd_body, dict) and cmd_body.get("operationTime"):
+                minutes = max(1, int(cmd_body["operationTime"]) // 60)
+            extra_body = {"engineParams": {"runTime": minutes}}
+        return self._send_auto_ai_command(vin, cmd_code, function, extra_body)
 
     def _send_bean_tech_command(
         self,
@@ -641,7 +649,13 @@ class GWMChinaAuthClient:
         self._decode_g_app_response(resp, "send_cmd")
         return seq_no
 
-    def _send_auto_ai_command(self, vin: str, cmd_code: int, function: str) -> str:
+    def _send_auto_ai_command(
+        self,
+        vin: str,
+        cmd_code: int,
+        function: str,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """AutoAI 通用指令通道(navinfo/gtsp),返回 transactionId。"""
         ts_ms = str(int(time.time() * 1000))
         body = {
@@ -655,6 +669,8 @@ class GWMChinaAuthClient:
             "vin": vin,
             "cmdCode": cmd_code,
         }
+        if extra_body:
+            body.update(extra_body)
         wrapper = {
             "body": body,
             "header": {
@@ -944,7 +960,8 @@ class GWMChinaAuthClient:
         if code and code not in {"0", "000000", "200"}:
             if code == "1013":
                 raise GWMCNRiskControlError("触发风控(1013),请在官方 APP 完成验证后再试")
-            raise GWMCNAuthError(f"{operation}: API 返回错误码 {code}")
+            desc = _ci_prop(root, "description") or _ci_prop(root, "msg") or ""
+            raise GWMCNAuthError(f"{operation}: API 返回错误码 {code} {desc}".rstrip())
         data = _ci_prop(root, "data")
         if data is None:
             data = root
@@ -970,7 +987,8 @@ class GWMChinaAuthClient:
         if code and code != "0":
             if code == "1013":
                 raise GWMCNRiskControlError("触发风控(1013),请在官方 APP 完成验证后再试")
-            raise GWMCNAuthError(f"{operation}: AutoAI 返回错误码 {code}")
+            msg = _ci_prop(header, "m") or ""
+            raise GWMCNAuthError(f"{operation}: AutoAI 返回错误码 {code} {msg}".rstrip())
         body = _ci_prop(root, "body")
         return root if body is None else body
 
