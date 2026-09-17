@@ -988,6 +988,13 @@ class GWMChinaAuthClient:
             if code == "1013":
                 raise GWMCNRiskControlError("触发风控(1013),请在官方 APP 完成验证后再试")
             msg = _ci_prop(header, "m") or ""
+            if code == "-114":
+                # 服务端串行保护:上一条远控还在车端执行中
+                raise GWMCNAuthError(
+                    f"{operation}: 上一条远控还在执行中(-114 {msg})。"
+                    "车端执行一条远控通常需要 10~30 秒(车辆深睡时更久),"
+                    "远程启动运行期间会话被占用,请稍候再按"
+                )
             raise GWMCNAuthError(f"{operation}: AutoAI 返回错误码 {code} {msg}".rstrip())
         body = _ci_prop(root, "body")
         return root if body is None else body
