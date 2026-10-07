@@ -1,0 +1,54 @@
+name: README 签名同步
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 拉取签名块并更新 README
+        env:
+          BLOCK_URL: https://raw.githubusercontent.com/chaosl1996/ha-share/main/docs/donate-block.md
+        run: |
+          set -e
+          curl -fsSL "$BLOCK_URL" -o /tmp/donate-block.md
+          python3 - <<'PY'
+          import pathlib, re
+          start, end = "<!-- DONATE:START -->", "<!-- DONATE:END -->"
+          block = pathlib.Path("/tmp/donate-block.md").read_text(encoding="utf-8").strip()
+          p = pathlib.Path("README.md")
+          if not p.exists():
+              print("no README, skip")
+          else:
+              c = p.read_text(encoding="utf-8")
+              if start in c:
+                  new = re.sub(re.escape(start) + r".*?" + re.escape(end), lambda m: block, c, flags=re.S)
+              else:
+                  sep = "\n\n---\n\n" if c.strip() else ""
+                  new = c.rstrip() + sep + block + "\n"
+              if new != c:
+                  p.write_text(new, encoding="utf-8")
+                  print("updated")
+              else:
+                  print("unchanged")
+          PY
+
+      - name: 提交
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "docs: 同步 README 打赏签名"
+            git push
+          fi
