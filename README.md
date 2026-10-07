@@ -230,3 +230,17 @@ token 过期由集成用 `gRefreshToken` 自动续期并持久化,无需人工�
 感谢以下开源项目提供了参考:
 - [wad350/gwm_home_assistant](https://github.com/wad350/gwm_home_assistant) (RU 版,签名算法参考)
 - [havaleiros/hassio-haval-h6-to-mqtt](https://github.com/havaleiros/hassio-haval-h6-to-mqtt) (BR 版,无签名 token 调用模式参考)
+
+---
+
+<!-- DONATE:START -->
+## ☕ 请作者喝杯咖啡
+
+如果这些项目对你有帮助，欢迎请我喝一杯咖啡，或顺手点个 Star 支持一下～
+
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/chaosl1996/ha-share@main/docs/donate.png" alt="微信 / 支付宝赞赏码" width="240">
+</p>
+
+> 你的每一份支持，都是我继续维护开源项目的动力 ❤️
+<!-- DONATE:END -->
