@@ -107,7 +107,7 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
         return self.coordinator.last_update_success and self.coordinator.data is not None
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         if not self.coordinator.data:
             return None
         return self.coordinator.data.get("parsed_data", {}).get("cabin_temp")
