@@ -71,7 +71,8 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
     _attr_name = "远程空调"
     _attr_icon = "mdi:car-air-conditioner"
     # 按项目惯例用字符串单位,不 import UnitOf* 枚举(v0.1.4 兼容性教训)
-    _attr_temperature_unit = "°C"
+    # 针对HA更新的修复：target_temperature 更新为：native_target_temperature，下同。
+    _attr_native_temperature_unit = "°C"
     _attr_min_temp = AC_MIN_TEMP
     _attr_max_temp = AC_MAX_TEMP
     _attr_target_temperature_step = 1
@@ -87,7 +88,7 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
         super().__init__(coordinator)
         self.config_entry = config_entry
         self._attr_unique_id = f"{coordinator.vin}_remote_ac"
-        self._attr_target_temperature = AC_DEFAULT_TEMP
+        self._attr_native_target_temperature = AC_DEFAULT_TEMP
         # 平台路由:gtsp 走「远程启动/熄火」映射,其余走空调专用指令
         self._platform = (platform or "").lower()
 
@@ -124,7 +125,7 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
         if (last := await self.async_get_last_state()) is not None:
             temp = last.attributes.get("temperature")
             if isinstance(temp, (int, float)) and AC_MIN_TEMP <= temp <= AC_MAX_TEMP:
-                self._attr_target_temperature = temp
+                self._attr_native_target_temperature = temp
 
     async def async_set_temperature(self, **kwargs) -> None:
         """设定目标温度;空调运行中则用新温度重新下发。"""
@@ -134,7 +135,7 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
         temp = int(temp)
         if not AC_MIN_TEMP <= temp <= AC_MAX_TEMP:
             raise HomeAssistantError(f"空调温度仅支持 {AC_MIN_TEMP}-{AC_MAX_TEMP}℃")
-        self._attr_target_temperature = temp
+        self._attr_native_target_temperature = temp
         self.async_write_ha_state()
         if self.hvac_mode != HVACMode.OFF:
             await self._send_start()
@@ -159,7 +160,7 @@ class GWMRemoteClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
             control_type, cmd_body = CMD_AIR_CONDITIONER_START, {
                 "allowStartEng": 1,
                 "operationTime": AC_DEFAULT_DURATION_SECONDS,
-                "temperature": self._attr_target_temperature,
+                "temperature": self._attr_native_target_temperature,
             }
         try:
             await self.coordinator.async_send_remote_command(control_type, cmd_body)
